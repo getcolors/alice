@@ -1,0 +1,71 @@
+---
+- name: Configure the Alice Transmission server
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for the new Droplet to accept SSH
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 300
+
+    - name: Install Transmission and AppArmor tools
+      ansible.builtin.apt:
+        name:
+          - transmission-cli
+          - transmission-daemon
+          - apparmor-utils
+        state: present
+        update_cache: true
+
+    # Ubuntu 24.04's AppArmor 4 profile cannot resolve systemd's disconnected
+    # notify socket. Even complain mode returns EACCES, so Type=notify times out.
+    - name: Disable the broken Transmission AppArmor profile
+      ansible.builtin.shell: |
+        if aa-status | grep -q '^[[:space:]]*transmission-daemon$'; then
+          # The Ubuntu profile file contains four profiles; aa-disable may
+          # unload the daemon successfully and still return non-zero for a
+          # sibling profile. The explicit postcondition below is authoritative.
+          aa-disable /usr/bin/transmission-daemon || true
+        fi
+        if aa-status | grep -q '^[[:space:]]*transmission-daemon$'; then
+          echo 'Transmission AppArmor profile remains loaded' >&2
+          exit 1
+        fi
+      register: transmission_apparmor
+      changed_when: "'Disabling' in transmission_apparmor.stdout"
+
+    - name: Stop Transmission before editing its managed settings
+      ansible.builtin.service:
+        name: transmission-daemon
+        state: stopped
+
+    - name: Bind the Transmission RPC UI to loopback
+      ansible.builtin.lineinfile:
+        path: /etc/transmission-daemon/settings.json
+        regexp: '^\s*"rpc-bind-address"\s*:'
+        line: '    "rpc-bind-address": "127.0.0.1",'
+
+    - name: Use SSH as the only RPC authentication boundary
+      ansible.builtin.lineinfile:
+        path: /etc/transmission-daemon/settings.json
+        regexp: '^\s*"rpc-authentication-required"\s*:'
+        line: '    "rpc-authentication-required": false,'
+
+    - name: Keep the Transmission RPC whitelist enabled
+      ansible.builtin.lineinfile:
+        path: /etc/transmission-daemon/settings.json
+        regexp: '^\s*"rpc-whitelist-enabled"\s*:'
+        line: '    "rpc-whitelist-enabled": true,'
+
+    - name: Restrict the Transmission RPC whitelist to loopback
+      ansible.builtin.lineinfile:
+        path: /etc/transmission-daemon/settings.json
+        regexp: '^\s*"rpc-whitelist"\s*:'
+        line: '    "rpc-whitelist": "127.0.0.1,::1",'
+
+    - name: Enable and start Transmission
+      ansible.builtin.service:
+        name: transmission-daemon
+        enabled: true
+        state: started

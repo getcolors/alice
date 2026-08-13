@@ -1,0 +1,34 @@
+terraform {
+  required_version = ">= 1.8.0"
+  required_providers {
+    digitalocean = {
+      source  = "digitalocean/digitalocean"
+      version = "2.51.0"
+    }
+  }
+}
+
+# DIGITALOCEAN_TOKEN arrives only in the OpenTofu process environment.
+provider "digitalocean" {}
+
+resource "digitalocean_droplet" "alice" {
+  name     = "alice-test"
+  region   = "ams3"
+  size     = "s-1vcpu-1gb-35gb-intel"
+  image    = "ubuntu-24-04-x64"
+  vpc_uuid = "00000000-0000-4000-8000-000000000000"
+  ssh_keys = ["812184"]
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+output "params" {
+  value = {
+    ip     = digitalocean_droplet.alice.ipv4_address
+    name   = "alice-fixture"
+    sudoer = "root"
+    user   = "root"
+  }
+}

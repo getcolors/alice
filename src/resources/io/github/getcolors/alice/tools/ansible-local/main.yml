@@ -1,0 +1,20 @@
+---
+- name: Manage local Alice access
+  hosts: local
+  tasks:
+    - name: Manage SSH access for {{ host_alias }}
+      ansible.builtin.blockinfile:
+        path: ~/.ssh/config
+        marker: "# {mark} alice {{ host_alias }} ANSIBLE MANAGED BLOCK"
+        state: "{{ block_state | default('present') }}"
+        create: true
+        mode: "0600"
+        block: |
+          Host {{ host_alias }}
+              HostName {{ ip }}
+              User {{ user }}
+              IdentityFile {{ identity_file }}
+              IdentitiesOnly yes
+              Port 22
+              StrictHostKeyChecking accept-new
+              ForwardAgent no

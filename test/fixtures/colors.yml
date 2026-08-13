@@ -1,0 +1,20 @@
+profile: alice-fixture
+workdir: .colors
+provider-compute: digitalocean
+provider-dns: false
+provider-backend: r2
+compute-prevent-destroy: true
+package: alice
+
+digitalocean-name: alice-test
+digitalocean-region: ams3
+digitalocean-size: s-1vcpu-1gb-35gb-intel
+digitalocean-image: ubuntu-24-04-x64
+digitalocean-vpc-uuid: 00000000-0000-4000-8000-000000000000
+digitalocean-ssh-keys: "812184"
+ssh-identity-file: ~/.ssh/id_ed25519
+transmission-rpc-port: 9091
+transmission-tunnel-local-port: 19091
+
+r2-bucket: alice-state
+r2-endpoint: https://example.r2.cloudflarestorage.com
