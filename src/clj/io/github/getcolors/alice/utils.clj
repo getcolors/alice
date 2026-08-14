@@ -2,7 +2,7 @@
   "Launcher contract and package path helpers."
   (:require [green.cli :as green-cli]))
 
-(def contract 1)
+(def contract 2)
 
 (defn tool-dir [opts tool]
   (green-cli/stage-dir opts tool {:default-profile "alice"}))

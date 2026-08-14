@@ -14,8 +14,9 @@ state or running a lifecycle command.
 - Keep credentials out of `colors.yml`; use ignored `COLORS_PAR_*` exports.
 - Never set `COLORS_PAR_PROFILE` and never edit generated `.colors/` files.
 - Use `build` and `create --dry-run` before a real lifecycle operation.
-- Keep `compute-prevent-destroy: true`. Lift it only for one authorized delete
-  with `COLORS_PAR_COMPUTE_PREVENT_DESTROY=false`.
+- Keep `compute-prevent-destroy: true`. The environment override is ignored;
+  `delete` authorizes manual destruction and `sync` authorizes only its
+  post-rsync cleanup.
 - Transmission binds its RPC UI to loopback and relies on SSH as its access
   boundary. Do not expose port 9091 publicly; use the tunnel command.
 
@@ -26,6 +27,7 @@ state or running a lifecycle command.
 ./green build
 ./green create --dry-run
 ./green create
+./green sync
 ./green describe
 ./green tunnel 19091
 ./green delete
@@ -33,4 +35,7 @@ state or running a lifecycle command.
 
 While `tunnel` runs, open
 `http://127.0.0.1:19091/transmission/web/`. A successful create already performs
-this tunnel check before returning.
+this tunnel check before returning. `sync` creates its own tunnel, prints that
+URL, adds desired magnets, incrementally rsyncs completed downloads directly
+into the configured local directory, verifies a final checksummed copy, and
+then destroys the Droplet. Failures retain it for a retry.

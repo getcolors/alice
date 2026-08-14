@@ -30,9 +30,13 @@
                          (conj (vec slots) :provider-backend)))
 
 (defn infrastructure-specs [opts]
-  (let [dir (tool-dir opts infrastructure-tool)]
+  (let [dir (tool-dir opts infrastructure-tool)
+        ;; The desired-state guard is never environment-controlled. An explicit
+        ;; delete event is the sole capability that renders a destroyable plan.
+        data (assoc opts :compute-prevent-destroy
+                    (not= :delete (:green/event opts)))]
     [(spec (template "infrastructure" "main.tf")
-           (str dir "/main.tf") opts)]))
+           (str dir "/main.tf") data)]))
 
 (def fallback-params
   {:ip "192.0.2.10" :user "root" :sudoer "root" :name "alice"})

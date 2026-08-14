@@ -9,6 +9,7 @@ SSH tunnel.
 ./green build
 ./green create --dry-run
 ./green create
+./green sync
 ./green describe
 ./green tunnel 19091
 ./green delete
@@ -16,7 +17,11 @@ SSH tunnel.
 
 While the tunnel runs, open
 `http://127.0.0.1:19091/transmission/web/`. Create performs the same tunneled UI
-check before it succeeds.
+check before it succeeds. `sync` provisions or resumes the Droplet, prints and
+keeps the tunnel URL available, downloads every desired magnet, incrementally
+rsyncs the download directory directly into the configured local directory,
+then stops Transmission, verifies a final checksummed copy, and destroys the
+Droplet. A failure retains the deployment for a retry.
 
 ## Install
 

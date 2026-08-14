@@ -35,6 +35,16 @@
       (is (not (str/includes? hcl "COLORS_PAR_DO_TOKEN")))
       (is (not (str/includes? hcl "fixture-secret"))))))
 
+(deftest explicit-delete-renders-destroyable-infrastructure
+  (let [dir (temp-dir)
+        opts (assoc vt/base :workdir dir :profile "delete-render"
+                            :green/event :delete)]
+    (sc/scaffold (assoc opts :green/event :create)
+                 (tools/infrastructure-specs opts))
+    (let [hcl (slurp (str (tools/tool-dir opts tools/infrastructure-tool)
+                          "/main.tf"))]
+      (is (str/includes? hcl "prevent_destroy = false")))))
+
 (deftest remote-render-installs-transmission-and-keeps-ui-private
   (let [dir (temp-dir)
         opts (assoc vt/base :workdir dir :profile "render" :green/event :build)
@@ -45,7 +55,8 @@
     (is (str/includes? play "aa-disable /usr/bin/transmission-daemon"))
     (is (str/includes? play "rpc-bind-address"))
     (is (str/includes? play "rpc-authentication-required"))
-    (is (str/includes? play "127.0.0.1"))))
+    (is (str/includes? play "127.0.0.1"))
+    (is (str/includes? play "/var/lib/transmission-daemon/downloads"))))
 
 (deftest acceptance-renders-a-real-ssh-tunnel-probe
   (let [dir (temp-dir)

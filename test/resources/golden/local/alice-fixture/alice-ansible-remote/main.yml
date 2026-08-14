@@ -64,6 +64,20 @@
         regexp: '^\s*"rpc-whitelist"\s*:'
         line: '    "rpc-whitelist": "127.0.0.1,::1",'
 
+    - name: Create the managed download directory
+      ansible.builtin.file:
+        path: /var/lib/transmission-daemon/downloads
+        state: directory
+        owner: debian-transmission
+        group: debian-transmission
+        mode: "0755"
+
+    - name: Use the managed download directory
+      ansible.builtin.lineinfile:
+        path: /etc/transmission-daemon/settings.json
+        regexp: '^\s*"download-dir"\s*:'
+        line: '    "download-dir": "/var/lib/transmission-daemon/downloads",'
+
     - name: Enable and start Transmission
       ansible.builtin.service:
         name: transmission-daemon

@@ -13,8 +13,10 @@
           Host {{ host_alias }}
               HostName {{ ip }}
               User {{ user }}
+          {% if identity_file != 'agent' %}
               IdentityFile {{ identity_file }}
               IdentitiesOnly yes
+          {% endif %}
               Port 22
               StrictHostKeyChecking accept-new
               ForwardAgent no

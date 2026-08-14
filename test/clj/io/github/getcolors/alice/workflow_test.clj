@@ -26,6 +26,18 @@
   (is (= [:alice/generated-cleanup]
          (next-steps :delete :alice/infrastructure))))
 
+(deftest sync-owns-download-copy-and-successful-cleanup
+  (is (= [:alice/infrastructure] (next-steps :sync :alice/start)))
+  (is (= [:alice/ansible-local] (next-steps :sync :alice/infrastructure)))
+  (is (= [:alice/ansible-remote] (next-steps :sync :alice/ansible-local)))
+  (is (= [:alice/sync] (next-steps :sync :alice/ansible-remote)))
+  (is (= [:alice/sync-ansible-local-delete]
+         (next-steps :sync :alice/sync)))
+  (is (= [:alice/sync-infrastructure-delete]
+         (next-steps :sync :alice/sync-ansible-local-delete)))
+  (is (= [:alice/sync-generated-cleanup]
+         (next-steps :sync :alice/sync-infrastructure-delete))))
+
 (deftest validate-and-describe-have-dedicated-graphs
   (is (empty? (next-steps :validate :alice/start)))
   (is (= [:alice/describe] (next-steps :describe :alice/start))))
@@ -40,23 +52,25 @@
                (assoc vt/base :green/event :create :green/dry-run true)
                {} must-not-run))))))
 
-(deftest real-lifecycle-needs-token-and-delete-override
+(deftest generic-destruction-overlay-is-inert-before-package-preflight
+  (let [result (workflow/start-step
+                (assoc vt/base :green/event :build
+                               :compute-prevent-destroy false)
+                {"COLORS_PAR_COMPUTE_PREVENT_DESTROY" "false"}
+                #(throw (ex-info "runtime validation ran" {})))]
+    (is (= 0 (:green/exit result)))
+    (is (true? (:compute-prevent-destroy result)))))
+
+(deftest real-lifecycle-needs-token-and-events-authorize-deletion
   (let [runtime-ok (constantly [])]
     (is (= 2 (:green/exit
               (workflow/start-step (assoc vt/base :green/event :create)
                                    {} runtime-ok))))
     (let [env {"COLORS_PAR_DO_TOKEN" "x"}]
-      (is (= 0 (:green/exit
-                (workflow/start-step (assoc vt/base :green/event :create)
-                                     env runtime-ok))))
-      (is (= 2 (:green/exit
-                (workflow/start-step (assoc vt/base :green/event :delete)
-                                     env runtime-ok))))
-      (is (= 0 (:green/exit
-                (workflow/start-step
-                 (assoc vt/base :green/event :delete)
-                 (assoc env "COLORS_PAR_COMPUTE_PREVENT_DESTROY" "false")
-                 runtime-ok)))))))
+      (doseq [event [:create :delete :sync]]
+        (is (= 0 (:green/exit
+                  (workflow/start-step (assoc vt/base :green/event event)
+                                       env runtime-ok))))))))
 
 (deftest backend-key-is-package-specific
   (let [dir (temp-dir)

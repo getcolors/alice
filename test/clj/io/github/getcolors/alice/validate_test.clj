@@ -15,7 +15,10 @@
    :digitalocean-ssh-keys "812184"
    :ssh-identity-file "~/.ssh/id_ed25519"
    :transmission-rpc-port 9091
-   :transmission-tunnel-local-port 19091})
+   :transmission-tunnel-local-port 19091
+   :transmission-local-directory "~/Downloads/alice"
+   :transmission-magnet-links
+   ["magnet:?xt=urn:btih:4cdce46e0cda3be676d4d3ae7ba1a1e42a24f2af&dn=fixture"]})
 
 (deftest complete-state-is-valid
   (is (= [] (validate/state-errors base))))
@@ -30,6 +33,17 @@
     (is (some #(str/includes? % ":digitalocean-region") errors))
     (is (some #(str/includes? % ":digitalocean-vpc-uuid") errors))))
 
+(deftest magnets-and-local-directory-are-validated
+  (is (some #(str/includes? % "non-empty YAML list")
+            (validate/state-errors (assoc base :transmission-magnet-links []))))
+  (is (some #(str/includes? % "40-character BTIH")
+            (validate/state-errors
+             (assoc base :transmission-magnet-links ["magnet:?dn=missing-hash"]))))
+  (is (some #(str/includes? % "unique BTIH")
+            (validate/state-errors
+             (assoc base :transmission-magnet-links
+                    (repeat 2 (first (:transmission-magnet-links base))))))))
+
 (deftest provider-package-and-ports-are-fixed
   (is (some #(str/includes? % "digitalocean")
             (validate/state-errors (assoc base :provider-compute "oci"))))
@@ -43,6 +57,11 @@
   (is (= ["required credential is not set: COLORS_PAR_DO_TOKEN"]
          (vec (validate/secret-errors base))))
   (is (= [] (vec (validate/secret-errors (assoc base :do-token "x"))))))
+
+(deftest destruction-environment-overlay-is-ignored
+  (is (true? (:compute-prevent-destroy
+              (validate/overlay base
+                                {"COLORS_PAR_COMPUTE_PREVENT_DESTROY" "false"})))))
 
 (deftest profile-overlay-is-always-refused
   (is (str/includes? (first (validate/env-errors

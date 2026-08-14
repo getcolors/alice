@@ -2,7 +2,8 @@
   "Desired-state, credential, tool, and DigitalOcean validation."
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
-            [green.process :as process]))
+            [green.process :as process]
+            [io.github.getcolors.alice.sync :as sync]))
 
 (def providers
   {:provider-compute
@@ -24,6 +25,13 @@
 
 (def slots [:provider-compute :provider-backend])
 (def profile-par (green-cli/par-name :profile))
+(def prevent-destroy-par (green-cli/par-name :compute-prevent-destroy))
+
+(defn overlay
+  "Apply parameter overlays while silently ignoring the retired environment
+  destruction override."
+  [opts env]
+  (green-cli/read-pars opts (dissoc (into {} env) prevent-destroy-par)))
 
 (defn placeholder? [x]
   (or (nil? x)
@@ -45,7 +53,8 @@
 (def required-keys
   [:profile :workdir :provider-compute :provider-backend
    :compute-prevent-destroy :package :ssh-identity-file
-   :transmission-rpc-port :transmission-tunnel-local-port])
+   :transmission-rpc-port :transmission-tunnel-local-port
+   :transmission-local-directory :transmission-magnet-links])
 
 (defn- valid-port? [x]
   (and (integer? x) (<= 1 x 65535)))
@@ -63,8 +72,11 @@
       [":provider-compute must be digitalocean"])
     (when-not (= "alice" (:package opts))
       [":package must be alice"])
-    (when-not (boolean? (:compute-prevent-destroy opts))
-      [":compute-prevent-destroy must be true or false"])
+    (when-not (and (string? (:ssh-identity-file opts))
+                   (not (str/blank? (:ssh-identity-file opts))))
+      [":ssh-identity-file must be a private-key path or agent"])
+    (when-not (true? (:compute-prevent-destroy opts))
+      [":compute-prevent-destroy must remain true in desired state"])
     (when-not (or (placeholder? (:profile opts))
                   (re-matches profile-re (str (:profile opts))))
       [":profile must be a safe 1-63 character name"])
@@ -73,13 +85,29 @@
       [":digitalocean-vpc-uuid must be a UUID"])
     (for [k [:transmission-rpc-port :transmission-tunnel-local-port]
           :when (not (valid-port? (get opts k)))]
-      (str k " must be an integer from 1 to 65535")))))
+      (str k " must be an integer from 1 to 65535"))
+    (when (placeholder? (:transmission-local-directory opts))
+      [":transmission-local-directory must be a non-empty path"])
+    (when-not (and (vector? (:transmission-magnet-links opts))
+                   (seq (:transmission-magnet-links opts)))
+      [":transmission-magnet-links must be a non-empty YAML list"])
+    (for [[index magnet] (map-indexed vector (:transmission-magnet-links opts))
+          :when (or (not (string? magnet))
+                    (str/includes? (str magnet) "\n")
+                    (nil? (sync/magnet-info-hash magnet)))]
+      (str ":transmission-magnet-links[" index
+           "] must be a magnet URI with a 40-character BTIH hash"))
+    (when (and (sequential? (:transmission-magnet-links opts))
+               (not= (count (:transmission-magnet-links opts))
+                     (count (distinct (keep sync/magnet-info-hash
+                                            (:transmission-magnet-links opts))))))
+      [":transmission-magnet-links must have unique BTIH hashes"]))))
 
 (defn secret-errors [opts]
   (map #(str "required credential is not set: " (green-cli/par-name %))
        (distinct (missing opts (slot-keys opts :secrets)))))
 
-(def required-tools ["tofu" "ansible-playbook" "ssh" "curl"])
+(def required-tools ["tofu" "ansible-playbook" "ssh" "curl" "rsync"])
 
 (defn- command-present? [runner command]
   (zero? (:exit (runner ["sh" "-c" "command -v \"$1\" >/dev/null 2>&1" "sh" command] {}))))

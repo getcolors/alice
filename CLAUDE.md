@@ -16,6 +16,7 @@ bb golden
 ./green validate
 ./green build
 ./green create --dry-run
+./green sync
 ./green describe
 ./green tunnel 19091
 ```
@@ -31,14 +32,20 @@ Droplet. Build and dry-run are credential-free. Validate reports desired-state,
 tool, credential-presence, and DigitalOcean authentication failures together.
 
 Credentials use only `COLORS_PAR_*` and never render. `COLORS_PAR_PROFILE` is
-always refused. Keep `compute-prevent-destroy: true`; lift it for one authorized
-delete with `COLORS_PAR_COMPUTE_PREVENT_DESTROY=false`.
+always refused. Keep `compute-prevent-destroy: true` in desired state;
+`COLORS_PAR_COMPUTE_PREVENT_DESTROY` is ignored. Explicit `delete` authorizes
+manual destruction. `sync` authorizes destruction only after every desired
+torrent is complete and the final checksummed rsync succeeds.
 
 The package owns its DigitalOcean template and depends only on Green. The UI is
 not a public service: Transmission RPC binds 127.0.0.1, RPC password auth is
 disabled because SSH is the only access boundary, and acceptance opens a
-short-lived SSH local forward before curling the web UI. Stage names are
-package-specific remote-state keys.
+short-lived SSH local forward before curling the web UI. `sync` keeps its own
+forward open, prints the UI URL, adds desired magnets, incrementally rsyncs
+completed downloads directly into the configured local directory, stops the
+daemon for a final checksummed rsync, and only then deletes the deployment.
+Failures retain the Droplet and state. Stage names are package-specific
+remote-state keys.
 
 Ubuntu 24.04's AppArmor 4 Transmission profile returns EACCES for systemd's
 disconnected notify socket even in complain mode, causing every service start to

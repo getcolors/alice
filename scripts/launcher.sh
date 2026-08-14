@@ -39,7 +39,7 @@ ok 'finds colors.yml by walking upward'
 
 out=$(cd "$tmp/project" && ALICE_LIB_ROOT="$root" ./green nonsense 2>&1 || true)
 grep -q Usage <<<"$out" || fail 'unknown command has no usage'
-for verb in build create delete validate describe tunnel; do
+for verb in build create sync delete validate describe tunnel; do
   grep -q "\"$verb\"" "$launcher" || fail "missing command $verb"
 done
 grep -q 'io.github.getcolors.alice.operator/run' "$launcher" || fail 'tunnel bypasses tested code'

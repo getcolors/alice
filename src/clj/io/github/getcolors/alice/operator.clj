@@ -34,7 +34,7 @@
          :else
          (let [opts (-> (green-cli/read-state file (slurp file))
                         (assoc :green/state-file (.getAbsolutePath file))
-                        (green-cli/read-pars env))
+                        (validate/overlay env))
                errors (validate/env-errors env)
                local-port (parse-port (first args)
                                       (or (:transmission-tunnel-local-port opts)

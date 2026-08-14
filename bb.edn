@@ -7,13 +7,15 @@
                    [io.github.getcolors.alice.tools-test]
                    [io.github.getcolors.alice.workflow-test]
                    [io.github.getcolors.alice.describe-test]
-                   [io.github.getcolors.alice.operator-test])
+                   [io.github.getcolors.alice.operator-test]
+                   [io.github.getcolors.alice.sync-test])
         :task (let [{:keys [fail error]}
                     (t/run-tests 'io.github.getcolors.alice.validate-test
                                  'io.github.getcolors.alice.tools-test
                                  'io.github.getcolors.alice.workflow-test
                                  'io.github.getcolors.alice.describe-test
-                                 'io.github.getcolors.alice.operator-test)]
+                                 'io.github.getcolors.alice.operator-test
+                                 'io.github.getcolors.alice.sync-test)]
                 (System/exit (if (pos? (+ fail error)) 1 0)))}
   golden {:doc "Render and diff committed golden output"
           :task (shell "./scripts/golden.sh")}

@@ -15,6 +15,10 @@ digitalocean-ssh-keys: "812184"
 ssh-identity-file: ~/.ssh/id_ed25519
 transmission-rpc-port: 9091
 transmission-tunnel-local-port: 19091
+transmission-local-directory: ~/Downloads/alice
+transmission-magnet-links:
+  - "magnet:?xt=urn:btih:4cdce46e0cda3be676d4d3ae7ba1a1e42a24f2af&dn=kali-linux-2026.2-raspberry-pi-armhf-img-xz&tr=http%3a%2f%2fbittorrent.kali.org%2fannounce&tr=https%3a%2f%2fbittorrent.kali.org%2fannounce&tr=http%3a%2f%2fbittorrent.kali.org%3a6969%2fannounce&tr=udp%3a%2f%2fbittorrent.kali.org%3a6969&ws=https%3a%2f%2fkali.download%2farm-images%2fkali-2026.2%2fkali-linux-2026.2-raspberry-pi-armhf.img.xz"
+  - "magnet:?xt=urn:btih:306d9b5251c2209a723675fbdd60a87072dba2bb&dn=kali-linux-2026.2-raspberry-pi-arm64-img-xz&tr=http%3A%2F%2Fbittorrent.kali.org%2Fannounce&tr=https%3A%2F%2Fbittorrent.kali.org%2Fannounce&tr=http%3A%2F%2Fbittorrent.kali.org%3A6969%2Fannounce&tr=udp%3A%2F%2Fbittorrent.kali.org%3A6969&ws=https%3A%2F%2Fkali.download%2Farm-images%2Fkali-2026.2%2Fkali-linux-2026.2-raspberry-pi-arm64.img.xz"
 
 r2-bucket: alice-state
 r2-endpoint: https://example.r2.cloudflarestorage.com

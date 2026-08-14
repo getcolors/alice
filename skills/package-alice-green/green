@@ -15,7 +15,7 @@
                (fs/path *file*))]
     (str (fs/parent (fs/canonicalize file)))))
 
-(def ^:private launcher-contract 1)
+(def ^:private launcher-contract 2)
 
 ;; Managed by `bb pin` — do not edit by hand. An initial nil is intentional:
 ;; the repository must be committed and pushed before a real SHA can be stamped.
@@ -94,16 +94,17 @@
     (cond-> args
       (not-any? file-arg? args) (conj "-f" (default-file)))))
 
-(def lifecycle-commands #{"build" "create" "delete" "validate" "describe"})
+(def lifecycle-commands #{"build" "create" "sync" "delete" "validate" "describe"})
 
 (def usage
-  (str "Usage: green <build|create|delete|validate|describe> "
+  (str "Usage: green <build|create|sync|delete|validate|describe> "
        "[-f|--file colors.yml] [--dry-run]\n"
        "       green tunnel [local-port]\n"
        "\n"
        "  build     render the work directory only — contact nothing\n"
        "  create    provision the Droplet, Transmission, SSH alias, and verify\n"
-       "  delete    remove the SSH alias, then guarded infrastructure\n"
+       "  sync      download desired magnets, rsync locally, then destroy\n"
+       "  delete    explicitly remove the SSH alias and infrastructure\n"
        "  validate  check all desired state, tools, and DigitalOcean access\n"
        "  describe  report SSH and Transmission status without changing state\n"
        "  tunnel    forward the private Transmission UI to loopback"))
