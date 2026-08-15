@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Provision a private Transmission web UI on a DigitalOcean Droplet and reach it through an SSH tunnel.">
+  <meta name="description" content="Provision a private Transmission web UI on a DigitalOcean Droplet, download desired magnets, and copy completed data home through SSH.">
   <title>alice — Green Package Skill Manual</title>
   <style>
-    :root{color-scheme:light;--ink:#1f2328;--muted:#59636e;--line:#d0d7de;--soft:#f6f8fa;--blue:#0969da;--green:#1a7f37}*{box-sizing:border-box}body{margin:0;color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:900px;margin:auto;padding:64px 28px 100px}h1{font-size:52px;line-height:1.05;margin:0}h2{margin-top:54px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{margin-top:30px}.lead{font-size:20px;color:var(--muted);max-width:760px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{padding:18px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--soft)}:not(pre)>code{padding:.12em .35em;border-radius:5px;background:var(--soft)}a{color:var(--blue)}.eyebrow{color:var(--green);font-weight:700;letter-spacing:.08em}.callout{padding:16px 18px;border-left:4px solid var(--green);background:#dafbe1}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{padding:18px;border:1px solid var(--line);border-radius:8px}.card h3{margin-top:0}@media(max-width:650px){main{padding-top:38px}.grid{grid-template-columns:1fr}h1{font-size:40px}}
+    :root{color-scheme:light;--ink:#1f2328;--muted:#59636e;--line:#d0d7de;--soft:#f6f8fa;--blue:#0969da;--green:#1a7f37;--warn:#9a6700}*{box-sizing:border-box}body{margin:0;color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:900px;margin:auto;padding:64px 28px 100px}h1{font-size:52px;line-height:1.05;margin:0}h2{margin-top:54px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{margin-top:30px}.lead{font-size:20px;color:var(--muted);max-width:760px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{padding:18px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--soft)}:not(pre)>code{padding:.12em .35em;border-radius:5px;background:var(--soft)}a{color:var(--blue)}.eyebrow{color:var(--green);font-weight:700;letter-spacing:.08em}.callout{padding:16px 18px;border-left:4px solid var(--green);background:#dafbe1}.warning{border-color:var(--warn);background:#fff8c5}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{padding:18px;border:1px solid var(--line);border-radius:8px}.card h3{margin-top:0}@media(max-width:650px){main{padding-top:38px}.grid{grid-template-columns:1fr}h1{font-size:40px}}
   </style>
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-4VKP1WY4QJ"></script>
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','G-4VKP1WY4QJ',{page_title:'alice — Green Package Skill Manual'});</script>
@@ -14,52 +14,66 @@
 <body><main>
   <p class="eyebrow">GREEN PACKAGE SKILL · DIGITALOCEAN · TRANSMISSION</p>
   <h1>alice</h1>
-  <p class="lead">One DigitalOcean Droplet running Transmission, with a managed SSH alias and a web UI that listens only on loopback.</p>
+  <p class="lead">One temporary DigitalOcean Droplet running Transmission, with a managed local SSH alias, a loopback-only web UI, and a guarded workflow that copies completed downloads home before destruction.</p>
 
-  <div class="callout"><strong>Private by construction.</strong> Use an SSH local forward to reach Transmission. Do not publish its RPC port.</div>
+  <div class="callout"><strong>Private by construction.</strong> Transmission RPC binds to <code>127.0.0.1</code>. Reach it through an SSH local forward; never publish the RPC port.</div>
 
   <h2>Quick start</h2>
   <pre><code>npx skills add getcolors/alice
 cp .agents/skills/package-alice-green/green ./green
+chmod +x green
 ./green validate
 ./green build
-./green create --dry-run
-./green create
-./green sync
-./green tunnel 19091</code></pre>
-  <p>While the foreground tunnel runs, open <code>http://127.0.0.1:19091/transmission/web/</code>. Create performs the same tunnel check before returning successfully.</p>
+./green create --dry-run</code></pre>
+  <p><code>validate</code> reports desired-state, local tool, credential-presence, and DigitalOcean authentication failures together. Build and dry-run require no credentials and perform no provider side effects. A real create, sync, or delete requires explicit authorization.</p>
 
-  <h2>Workflow</h2>
+  <h2>Architecture</h2>
+  <div class="grid">
+    <div class="card"><h3>Infrastructure</h3><p>OpenTofu creates one Ubuntu 24.04 Droplet on the configured existing DigitalOcean VPC. The cloud firewall and host configuration expose only restricted SSH.</p></div>
+    <div class="card"><h3>Private UI</h3><p>Transmission listens on loopback. RPC password authentication is intentionally disabled because the SSH key and local tunnel form the access boundary.</p></div>
+    <div class="card"><h3>Local integration</h3><p>A managed SSH config block gives the Droplet a stable local alias. Create opens a short-lived forward and curls the web UI before reporting success.</p></div>
+    <div class="card"><h3>Data path</h3><p>Desired public magnets download to the Droplet, then <code>rsync</code> copies their content directly into the configured local destination over SSH.</p></div>
+  </div>
+  <p>Ubuntu 24.04’s packaged Transmission AppArmor profile cannot use systemd’s disconnected notification socket. The package disables that broken profile and verifies it is unloaded so systemd can supervise Transmission reliably.</p>
+
+  <h2>Workflows</h2>
   <pre><code>create   start → infrastructure → local SSH → Transmission → tunnel acceptance
-sync     create → UI tunnel → magnets → incremental rsync → final checksum → delete
+sync     create → tunnel → magnets → incremental rsync → final checksum → delete
 delete   start → remove local SSH alias → authorized infrastructure → cleanup
-validate state + tools + credentials + DigitalOcean authentication
+validate state + tools + credential presence + DigitalOcean authentication
 describe local alias + SSH reachability + Transmission service status</code></pre>
+  <p>Create is convergent: rerun it to repair the existing Droplet. <code>describe</code> is the safe first diagnostic, and <code>tunnel 19091</code> keeps a foreground local forward open. While it runs, open <code>http://127.0.0.1:19091/transmission/web/</code>.</p>
 
   <h2>Desired state</h2>
   <div class="grid">
-    <div class="card"><h3>DigitalOcean</h3><p>Name, region, size, image, an existing VPC UUID, and one existing SSH key identifier.</p></div>
-    <div class="card"><h3>Transmission</h3><p>Desired public magnets, direct local download destination, RPC port, and tunnel port. RPC binds to <code>127.0.0.1</code>.</p></div>
-    <div class="card"><h3>State</h3><p>Local, S3, or R2 OpenTofu backend under a package-specific state key.</p></div>
-    <div class="card"><h3>Credentials</h3><p><code>COLORS_PAR_DO_TOKEN</code> and optional backend credentials remain in the process environment.</p></div>
+    <div class="card"><h3>DigitalOcean</h3><p>Name, region, size, image, an existing VPC UUID, firewall sources, and one existing SSH key identifier.</p></div>
+    <div class="card"><h3>Transmission</h3><p>Desired public magnet links, RPC port, tunnel port, remote download location, and the direct local destination.</p></div>
+    <div class="card"><h3>State</h3><p>A local, S3, or R2 OpenTofu backend stores package-specific stage keys under the selected profile.</p></div>
+    <div class="card"><h3>Credentials</h3><p><code>COLORS_PAR_DO_TOKEN</code> and optional backend credentials stay in the process environment and never render.</p></div>
   </div>
-  <p>See the <a href="skills/package-alice-green/references/configuration.md">configuration reference</a> for all keys. SSH is the RPC authentication boundary; Ubuntu 24.04's broken Transmission AppArmor notify profile is disabled so systemd can supervise the daemon.</p>
+  <p>See the <a href="skills/package-alice-green/references/configuration.md">configuration reference</a> for every supported key.</p>
 
-  <h2>Safety</h2>
+  <h2>Safe synchronization</h2>
+  <p><code>./green sync</code> provisions or resumes the deployment, keeps the tunnel URL available, adds every desired magnet, and incrementally copies completed data. Once every torrent is complete, it stops Transmission and performs a final checksummed copy. Only a successful final copy authorizes automatic destruction.</p>
+  <p>If a download, tunnel, checksum, or copy fails, Alice retains the Droplet and state so the operation can resume. It does not interpret partial progress as permission to destroy the remote copy.</p>
+
+  <div class="callout warning"><strong>Deletion has an unusual boundary.</strong> Alice deliberately ignores <code>COLORS_PAR_COMPUTE_PREVENT_DESTROY</code>. An explicit <code>delete</code>, or a successful sync after its final checksummed transfer, is the authorization to destroy compute.</div>
+
+  <h2>Safety and recovery</h2>
   <ul>
     <li>Never export <code>COLORS_PAR_PROFILE</code>.</li>
-    <li>Keep <code>compute-prevent-destroy: true</code>; its environment override is ignored.</li>
-    <li>Never edit or commit <code>.colors/</code>.</li>
-    <li>Run <code>build</code> and <code>create --dry-run</code> before real operations.</li>
+    <li>Keep <code>compute-prevent-destroy: true</code> in committed desired state.</li>
+    <li>Never edit, read as source, or commit generated <code>.colors/</code>.</li>
+    <li>Keep the local state until deletion completes; recover or import lost state before destroying anything.</li>
+    <li>Do not run real <code>create</code>, <code>sync</code>, or <code>delete</code> without explicit authorization.</li>
   </ul>
+  <p>If Transmission is unhealthy, run <code>./green describe</code>, then inspect <code>systemctl status transmission-daemon</code> and its journal over the managed SSH alias. Preserve both local and remote copies while diagnosing an incomplete sync.</p>
 
-  <h2>Recovery</h2>
-  <p>Repeated create converges the existing Droplet. If Transmission fails, inspect <code>systemctl status transmission-daemon</code> and its journal over SSH. Preserve local OpenTofu state until deletion; if it is lost, recover or import the Droplet before destroying anything.</p>
-
-  <h2>Development</h2>
+  <h2>Development and source</h2>
   <pre><code>bb test
 bb golden
 ./scripts/launcher.sh</code></pre>
+  <p>Tests do not provision resources. Inspect generated and golden diffs before accepting them. The deployment launcher and installed Package Skill launcher are copies and must be re-synchronized after updates.</p>
   <p><a href="https://github.com/getcolors/alice">Source on GitHub</a> · MIT licensed.</p>
 </main></body>
 </html>
