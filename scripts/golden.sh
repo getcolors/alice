@@ -42,8 +42,17 @@ done
 
 infra="$base/alice-infrastructure/main.tf"
 grep -q 'resource "digitalocean_droplet" "alice"' "$infra"
-grep -q 'vpc_uuid = "00000000-0000-4000-8000-000000000000"' "$infra"
 grep -q 'prevent_destroy = true' "$infra"
+
+# Discovery mode reads the region's default VPC rather than pinning a UUID, and
+# asserts the answer really is the account default.
+grep -q 'data "digitalocean_vpc" "default"' "$infra"
+grep -q 'vpc_uuid = data.digitalocean_vpc.default.id' "$infra"
+grep -q 'condition     = data.digitalocean_vpc.default.default' "$infra"
+if grep -Eq '^[[:space:]]+vpc_uuid = "' "$infra"; then
+  echo 'golden: discovery mode pinned a literal VPC UUID' >&2
+  exit 1
+fi
 
 # Keygen mode owns a profile-named account key resource, references it by
 # attribute rather than a literal id, and surfaces its id in state so the
@@ -60,6 +69,17 @@ if grep -q 'digitalocean_ssh_key' "$optout_infra"; then
   exit 1
 fi
 grep -q 'ssh_keys = \["812184"\]' "$optout_infra"
+
+# A pinned VPC creates no data source and no postcondition.
+grep -q 'vpc_uuid = "00000000-0000-4000-8000-000000000000"' "$optout_infra"
+if grep -q 'digitalocean_vpc' "$optout_infra"; then
+  echo 'golden: a pinned VPC still rendered the discovery data source' >&2
+  exit 1
+fi
+if grep -q 'postcondition' "$optout_infra"; then
+  echo 'golden: a pinned VPC rendered the default-VPC postcondition' >&2
+  exit 1
+fi
 
 # The block carries IdentityFile only where the package owns the key (SSH
 # Config Standard §3); in opt-out mode the operator has their own arrangements

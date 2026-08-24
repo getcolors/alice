@@ -1,7 +1,9 @@
-# Opt-out fixture: digitalocean-ssh-keys is present, so the package must not
-# generate, validate, or delete any key material, must create no account key
-# resource, and must leave the IdentityFile pair out of the ~/.ssh/config block
-# (standards/ssh-keypair.md §1, standards/ssh-config.md §3).
+# Opt-out fixture: both optional keys are present, so the package must pin what
+# it was given and discover nothing. digitalocean-ssh-keys means no key material
+# is generated, validated, or deleted, no account key resource is created, and
+# the ~/.ssh/config block carries no IdentityFile pair (standards/ssh-keypair.md
+# §1, standards/ssh-config.md §3). digitalocean-vpc-uuid means the compute
+# template declares no VPC data source and no postcondition.
 profile: alice-optout-fixture
 workdir: .colors
 provider-compute: digitalocean

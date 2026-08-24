@@ -11,7 +11,9 @@ digitalocean-name: alice
 digitalocean-region: ams3
 digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-24-04-x64
-digitalocean-vpc-uuid: 00000000-0000-4000-8000-000000000000
+# No digitalocean-vpc-uuid: the region's default VPC is discovered at runtime
+# through a data source, and the apply asserts it really is the account default.
+# Supply an explicit UUID only to target a VPC that is not the regional default.
 # No digitalocean-ssh-keys: the package generates and owns an ed25519 keypair
 # named after the profile in ~/.ssh, registers it with DigitalOcean, and removes
 # both once the Droplet is destroyed. Supplying an explicit key id here is the

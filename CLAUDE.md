@@ -24,6 +24,24 @@ bb golden
 Never run real create/delete without explicit authorization. Never edit or read
 `.colors/`, and never read `.envrc.private`.
 
+## Two optional keys, one idiom
+
+`digitalocean-ssh-keys` and `digitalocean-vpc-uuid` are both optional, and in
+both cases **presence is the only switch** — there is no mode flag. Omit them
+and the package supplies the answer itself; supply them and it uses what it was
+given, verbatim, creating and discovering nothing.
+
+`digitalocean-vpc-uuid` absent means the region's default VPC is read through a
+`digitalocean_vpc` data source, and the Droplet's `lifecycle` asserts
+`data.digitalocean_vpc.default.default` so a region that answered with some
+other VPC fails the apply instead of placing the Droplet on an unexpected
+network silently. A UUID is an opaque account-specific value that says nothing
+a reader can check, goes stale when an account changes, and has to be looked up
+by hand before a deployment can exist; the region already determines it. The
+explicit key remains the escape hatch for a VPC that is not the regional
+default. A supplied UUID is still shape-checked — optional is not unvalidated.
+Nothing discovered is ever written back into desired state.
+
 ## The machine keypair and the SSH alias
 
 The package implements the workspace standards `standards/ssh-keypair.md` and

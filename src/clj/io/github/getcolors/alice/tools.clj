@@ -36,7 +36,8 @@
         ;; delete event is the sole capability that renders a destroyable plan.
         data (assoc opts
                     :compute-prevent-destroy (not= :delete (:green/event opts))
-                    :ssh-keygen (validate/keygen? opts))]
+                    :ssh-keygen (validate/keygen? opts)
+                    :vpc-discovery (validate/vpc-discovery? opts))]
     [(spec (template "infrastructure" "main.tf")
            (str dir "/main.tf") data)]))
 

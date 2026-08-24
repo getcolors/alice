@@ -25,10 +25,15 @@ Both name the file and line and leave the decision to a human.
 
 Required keys select the unique profile/work directory, DigitalOcean compute,
 and local/S3/R2 state backend. DigitalOcean needs a Droplet name, region, size,
-image, and an existing VPC UUID.
+and image.
 
 Alice also accepts:
 
+- `digitalocean-vpc-uuid` — an existing VPC UUID. Omit it and the region's
+  default VPC is discovered at runtime through a `digitalocean_vpc` data
+  source, with the apply asserting that the discovered VPC really is the
+  account default. Supply one only to target a VPC that is not the regional
+  default; a supplied value is still checked for UUID shape;
 - `digitalocean-ssh-keys` — an existing SSH key ID or fingerprint. Omit it and
   the package owns the machine keypair instead: it generates
   `~/.ssh/<profile>`(`.pub`), registers a DigitalOcean key named after the
@@ -49,7 +54,8 @@ cleanup.
 
 ## Lifecycle
 
-Create generates the machine keypair before any provider call, refuses if a key
+Create discovers the regional default VPC unless one is pinned, generates the
+machine keypair before any provider call, refuses if a key
 exists that state does not account for or if DigitalOcean already holds a key
 named after the profile that this deployment does not own, provisions the
 Droplet, writes `Host <profile>` into `~/.ssh/config`, installs Transmission, forces RPC onto loopback, and verifies the web UI through

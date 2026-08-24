@@ -8,12 +8,13 @@
 
 (def providers
   {:provider-compute
-   ;; `digitalocean-ssh-keys` is deliberately absent from :required. Its
-   ;; presence is the only switch between opt-out and keygen mode (SSH Keypair
-   ;; Standard §1) — requiring it would make keygen mode unreachable.
+   ;; Two keys are deliberately absent from :required, and in both cases their
+   ;; presence is the only switch. `digitalocean-ssh-keys` chooses between
+   ;; opt-out and keygen mode (SSH Keypair Standard §1). `digitalocean-vpc-uuid`
+   ;; chooses between a pinned VPC and discovering the region's default one at
+   ;; runtime. Requiring either would make the discovering side unreachable.
    {"digitalocean" {:required [:digitalocean-name :digitalocean-region
-                                :digitalocean-size :digitalocean-image
-                                :digitalocean-vpc-uuid]
+                                :digitalocean-size :digitalocean-image]
                     :secrets [:do-token]
                     :tofu-env {:do-token "DIGITALOCEAN_TOKEN"}}}
    :provider-backend
@@ -41,6 +42,18 @@
   (or (nil? x)
       (and (string? x)
            (or (str/blank? x) (= "REPLACE_ME" (str/upper-case x))))))
+
+(defn vpc-discovery?
+  "Whether the region's default VPC is discovered at runtime, rather than
+  pinned in desired state.
+
+  Discovery is the default because a UUID is an opaque account-specific value
+  that says nothing a reader can check, goes stale silently when an account
+  changes, and has to be looked up by hand before a deployment can exist at
+  all. The region already determines the answer. Supplying an explicit UUID
+  remains the escape hatch for a VPC that is not the regional default."
+  [opts]
+  (placeholder? (:digitalocean-vpc-uuid opts)))
 
 (defn keygen?
   "Whether this deployment owns its machine keypair. Delegates to ONCE, the
@@ -120,6 +133,52 @@
 (defn- command-present? [runner command]
   (zero? (:exit (runner ["sh" "-c" "command -v \"$1\" >/dev/null 2>&1" "sh" command] {}))))
 
+(def account-url "https://api.digitalocean.com/v2/account")
+
+(defn api-error
+  "Turn one probe of the DigitalOcean account endpoint into an error, or nil.
+
+  The distinction matters more than it looks. `curl -f` exits non-zero for
+  every HTTP status at or above 400, so a single message covering all of them
+  reports a DigitalOcean outage as a bad credential — and sends the operator
+  off to rotate a token that was never the problem. Only 401 and 403 say
+  anything about the token. A 5xx is DigitalOcean's own gateway, and the fix
+  is to wait and retry, not to touch desired state or credentials.
+
+  A request that never reached the API is the third case: DNS, TLS, a proxy,
+  or no route. curl reports that as the literal `000` from `%{http_code}`, so
+  a zero status is not an HTTP status at all. That is the operator's network,
+  and naming it as such saves the same wasted rotation."
+  [{:keys [exit out]}]
+  (let [status (some-> out str str/trim (as-> s (re-find #"\d{3}\z" s)) parse-long)]
+    (cond
+      (or (nil? status) (zero? status))
+      (str "could not reach the DigitalOcean API at " account-url
+           " (curl exit " exit "): this is a local network, DNS, or TLS "
+           "failure, not a credential problem. Check connectivity and retry.")
+
+      (<= 200 status 299) nil
+
+      (#{401 403} status)
+      (str "DigitalOcean rejected COLORS_PAR_DO_TOKEN (HTTP " status
+           "): the token is missing, expired, revoked, or lacks read access "
+           "to the account. Issue a new personal access token and update "
+           ".envrc.private.")
+
+      (= 429 status)
+      (str "DigitalOcean rate-limited the credential check (HTTP 429). The "
+           "token is valid; wait for the limit to reset and retry.")
+
+      (<= 500 status 599)
+      (str "the DigitalOcean API returned HTTP " status " for " account-url
+           ". That is a failure on DigitalOcean's side, not your credential — "
+           "do not rotate COLORS_PAR_DO_TOKEN. Check "
+           "https://status.digitalocean.com and retry.")
+
+      :else
+      (str "unexpected HTTP " status " from " account-url
+           " during the credential check."))))
+
 (defn runtime-errors
   "Check local tools and authenticate the configured DigitalOcean token.
 
@@ -131,10 +190,14 @@
          tool-errors (for [tool required-tools :when (not (get present tool))]
                        (str "required tool is not on PATH: " tool))
          token (:do-token opts)
+         ;; No `-f`: the status code is the diagnosis, so it has to survive
+         ;; into stdout instead of collapsing into curl's exit code. Timeouts
+         ;; bound a hung gateway — a 504 took fifteen seconds to arrive.
          api-result (when (and (not (placeholder? token)) (get present "curl"))
-                      (runner ["curl" "-fsS" "-o" "/dev/null"
+                      (runner ["curl" "-sS" "-o" "/dev/null"
+                               "-w" "%{http_code}"
+                               "--connect-timeout" "10" "--max-time" "20"
                                "-H" (str "Authorization: Bearer " token)
-                               "https://api.digitalocean.com/v2/account"] {}))]
+                               account-url] {}))]
      (vec (concat tool-errors
-                  (when (and api-result (not (zero? (:exit api-result))))
-                    ["DigitalOcean API rejected COLORS_PAR_DO_TOKEN"]))))))
+                  (when-let [err (some-> api-result api-error)] [err]))))))
