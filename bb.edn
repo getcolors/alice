@@ -4,6 +4,8 @@
  {test {:doc "Run unit tests under Babashka"
         :requires ([clojure.test :as t]
                    [io.github.getcolors.alice.validate-test]
+                   [io.github.getcolors.alice.ssh-test]
+                   [io.github.getcolors.alice.ssh-config-test]
                    [io.github.getcolors.alice.tools-test]
                    [io.github.getcolors.alice.workflow-test]
                    [io.github.getcolors.alice.describe-test]
@@ -11,6 +13,8 @@
                    [io.github.getcolors.alice.sync-test])
         :task (let [{:keys [fail error]}
                     (t/run-tests 'io.github.getcolors.alice.validate-test
+                                 'io.github.getcolors.alice.ssh-test
+                                 'io.github.getcolors.alice.ssh-config-test
                                  'io.github.getcolors.alice.tools-test
                                  'io.github.getcolors.alice.workflow-test
                                  'io.github.getcolors.alice.describe-test

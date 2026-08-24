@@ -20,11 +20,15 @@
   (is (= [:alice/ansible-remote] (next-steps :create :alice/ansible-local)))
   (is (= [:alice/acceptance] (next-steps :create :alice/ansible-remote))))
 
-(deftest delete-removes-local-alias-before-droplet
+(deftest delete-removes-local-alias-before-droplet-and-key-after-it
   (is (= [:alice/ansible-local] (next-steps :delete :alice/start)))
   (is (= [:alice/infrastructure] (next-steps :delete :alice/ansible-local)))
-  (is (= [:alice/generated-cleanup]
-         (next-steps :delete :alice/infrastructure))))
+  ;; The two orderings the standards deliberately disagree on: the config
+  ;; block goes before the destroy (stale but harmless if the destroy fails),
+  ;; the keypair strictly after it (a key that predeceases its Droplet locks
+  ;; the operator out of a machine that still exists).
+  (is (= [:alice/ssh-cleanup] (next-steps :delete :alice/infrastructure)))
+  (is (= [:alice/generated-cleanup] (next-steps :delete :alice/ssh-cleanup))))
 
 (deftest sync-owns-download-copy-and-successful-cleanup
   (is (= [:alice/infrastructure] (next-steps :sync :alice/start)))
@@ -35,8 +39,28 @@
          (next-steps :sync :alice/sync)))
   (is (= [:alice/sync-infrastructure-delete]
          (next-steps :sync :alice/sync-ansible-local-delete)))
+  ;; Sync carries the same ordering as delete, because sync *is* a create and
+  ;; a delete: the key can only go once the destroy has succeeded.
+  (is (= [:alice/sync-ssh-cleanup]
+         (next-steps :sync :alice/sync-infrastructure-delete)))
   (is (= [:alice/sync-generated-cleanup]
-         (next-steps :sync :alice/sync-infrastructure-delete))))
+         (next-steps :sync :alice/sync-ssh-cleanup))))
+
+(deftest sync-teardown-steps-run-relabelled-as-delete
+  ;; The key and block steps gate on `:green/event`, so the relabelling is what
+  ;; lets one implementation serve both verbs. Without it `cleanup-step` would
+  ;; see `:sync`, skip, and leave the keypair behind on every ephemeral run.
+  (let [seen (atom nil)
+        spy (fn [opts] (reset! seen (:green/event opts)) (assoc opts :green/exit 0))
+        result ((workflow/as-event :delete spy) {:green/event :sync})]
+    (is (= :delete @seen) "the wrapped step runs as a delete")
+    (is (= :sync (:green/event result)) "and the caller's event is restored")))
+
+(deftest sync-cleans-the-keypair-up-only-in-keygen-mode
+  ;; Opt-out mode must not delete key material it did not create — the
+  ;; operator supplied that key and may use it for other things.
+  (let [optout (assoc vt/base :green/event :sync :digitalocean-ssh-keys "812184")]
+    (is (= 0 (:green/exit (workflow/sync-ssh-cleanup-step optout))))))
 
 (deftest validate-and-describe-have-dedicated-graphs
   (is (empty? (next-steps :validate :alice/start)))

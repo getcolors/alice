@@ -8,6 +8,7 @@
             [green.scaffold :as sc]
             [green.tofu :as tofu]
             [green.workflow :as wf]
+            [io.github.getcolors.alice.ssh-config :as ssh-config]
             [io.github.getcolors.alice.utils :as utils]
             [io.github.getcolors.alice.validate :as validate]))
 
@@ -33,13 +34,24 @@
   (let [dir (tool-dir opts infrastructure-tool)
         ;; The desired-state guard is never environment-controlled. An explicit
         ;; delete event is the sole capability that renders a destroyable plan.
-        data (assoc opts :compute-prevent-destroy
-                    (not= :delete (:green/event opts)))]
+        data (assoc opts
+                    :compute-prevent-destroy (not= :delete (:green/event opts))
+                    :ssh-keygen (validate/keygen? opts))]
     [(spec (template "infrastructure" "main.tf")
            (str dir "/main.tf") data)]))
 
 (def fallback-params
   {:ip "192.0.2.10" :user "root" :sudoer "root" :name "alice"})
+
+(defn state-output
+  "The compute stage's applied `params`, or nil when no state is readable. The
+  SSH Keypair Standard's create matrix keys on this best-effort read: an
+  unreadable state (a fresh clone, a missing backend) counts as absent."
+  [opts]
+  (try (some-> (tofu/outputs (tool-dir opts infrastructure-tool)
+                             (credential-env opts))
+               :params walk/keywordize-keys)
+       (catch Exception _ nil)))
 
 (defn- output-params [result]
   (some-> (get-in result [:tofu/outputs :params]) walk/keywordize-keys))
@@ -72,7 +84,9 @@
 
 (defn ansible-local-specs [opts]
   (let [dir (tool-dir opts ansible-local-tool)
-        data (data-fn opts)]
+        data (assoc (data-fn opts)
+                    :ssh-keygen (validate/keygen? opts)
+                    :ssh-config-identity-file (ssh-config/identity-file opts))]
     [(spec (template "ansible-local" "ansible.cfg")
            (str dir "/ansible.cfg") data)
      (spec (template "ansible-local" "inventory.ini")
@@ -91,7 +105,6 @@
       :extra-vars {:host_alias (:host-alias data)
                    :ip (:ip data)
                    :user (:user data)
-                   :identity_file (:ssh-identity-file data)
                    :block_state (if delete? "absent" "present")}}
      (ansible-local-specs opts))))
 

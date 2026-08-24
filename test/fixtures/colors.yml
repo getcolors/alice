@@ -1,3 +1,6 @@
+# Keygen mode: no digitalocean-ssh-keys, so the package owns the machine
+# keypair per standards/ssh-keypair.md and the compute template declares the
+# profile-named digitalocean_ssh_key resource.
 profile: alice-fixture
 workdir: .colors
 provider-compute: digitalocean
@@ -11,8 +14,6 @@ digitalocean-region: ams3
 digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-24-04-x64
 digitalocean-vpc-uuid: 00000000-0000-4000-8000-000000000000
-digitalocean-ssh-keys: "812184"
-ssh-identity-file: ~/.ssh/id_ed25519
 transmission-rpc-port: 9091
 transmission-tunnel-local-port: 19091
 transmission-local-directory: ~/Downloads/alice

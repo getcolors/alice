@@ -24,11 +24,59 @@ bb golden
 Never run real create/delete without explicit authorization. Never edit or read
 `.colors/`, and never read `.envrc.private`.
 
+## The machine keypair and the SSH alias
+
+The package implements the workspace standards `standards/ssh-keypair.md` and
+`standards/ssh-config.md`. Absence of `digitalocean-ssh-keys` in desired state
+is keygen mode and the only switch: the package generates
+`~/.ssh/<profile>`(`.pub`), declares a `digitalocean_ssh_key` named after the
+profile in its own state, writes a `~/.ssh/config` block aliased `<profile>`
+with `IdentityFile`/`IdentitiesOnly`, and removes all of it on the way out.
+Supplying an explicit key id is opt-out: no key material is generated,
+validated, or deleted, no account key resource is created, and the block carries
+no `IdentityFile`, because the operator has their own arrangements for finding
+their key and guessing is worse than silence.
+
+Key behaviour is ONCE's (`io.github.getcolors.once.ssh`), reused rather than
+reimplemented so one standard has one implementation; the `~/.ssh/config` play
+is deliberately alice's own copy, because that file is shared with every other
+host the operator reaches and an unrelated upstream change must not rewrite it
+at pin-bump time. There is no rotation verb: Droplet key sets are ForceNew, so
+rotation is `delete` then `create`.
+
+An existing `~/.ssh/<profile>` with no readable compute state is an error, never
+an overwrite — it may be the only credential to a Droplet that is still alive.
+Because `sync` destroys the Droplet on success, a run interrupted between the
+destroy and the key removal leaves that state behind and the next `sync` will
+refuse until the key is removed by hand. That is the standard working, not a
+bug: verify at DigitalOcean that no Droplet for the profile survives, then
+remove `~/.ssh/<profile>` and `~/.ssh/<profile>.pub`.
+
+`sync` is the one place alice departs from the letter of the keypair standard,
+which bars a `sync` from touching key material. That clause is written for
+packages where `sync` is auxiliary and leaves the machine alone; alice's `sync`
+*is* the lifecycle. The DAG resolves it rather than deviating: the teardown
+steps run relabelled as `:delete` through `workflow/as-event`, so what executes
+is still a create and still a delete, and `sync` has no key lifecycle of its
+own. Do not "simplify" that relabelling away — `cleanup-step` gates on
+`:green/event`, and it would silently start leaving keys behind.
+
+The marker is mid-migration. Alice used to write `# BEGIN alice <alias> ...`;
+the standard's marker carries the alias alone. `ansible-local/main.yml` removes
+the superseded block before writing the new one, and `ssh-config.clj`
+recognises the old marker as its own so the ownership check does not refuse the
+migration meant to clean it up. Retire the removal task and the superseded
+markers together, one pin cycle from now, or not at all.
+
 ## Architecture and safety
 
 Create is `start -> infrastructure -> ansible-local -> ansible-remote ->
-acceptance`. Delete removes the local managed SSH block before destroying the
-Droplet. Build and dry-run are credential-free. Validate reports desired-state,
+acceptance`. Delete is `start -> ansible-local -> infrastructure -> ssh-cleanup
+-> generated-cleanup`: the managed `~/.ssh/config` block goes before the destroy
+and the keypair strictly after it. Those two orders disagree deliberately — a
+stale block is harmless, a key removed ahead of its Droplet locks you out of a
+machine that still exists — and `standards/ssh-config.md` §4 forbids tidying
+them into agreement. Build and dry-run are credential-free. Validate reports desired-state,
 tool, credential-presence, and DigitalOcean authentication failures together.
 
 Credentials use only `COLORS_PAR_*` and never render. `COLORS_PAR_PROFILE` is
@@ -37,7 +85,8 @@ always refused. Keep `compute-prevent-destroy: true` in desired state;
 manual destruction. `sync` authorizes destruction only after every desired
 torrent is complete and the final checksummed rsync succeeds.
 
-The package owns its DigitalOcean template and depends only on Green. The UI is
+The package owns its DigitalOcean template and depends on Green and on ONCE for
+the keypair implementation alone. The UI is
 not a public service: Transmission RPC binds 127.0.0.1, RPC password auth is
 disabled because SSH is the only access boundary, and acceptance opens a
 short-lived SSH local forward before curling the web UI. `sync` keeps its own

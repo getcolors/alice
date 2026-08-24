@@ -53,7 +53,5 @@
               HostName {{ ip }}
               User {{ user }}
               Port 22
-<% if ssh-keygen %>              IdentityFile <{ ssh-config-identity-file }>
-              IdentitiesOnly yes
-<% endif %>              StrictHostKeyChecking accept-new
+              StrictHostKeyChecking accept-new
               ForwardAgent no

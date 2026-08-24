@@ -3,13 +3,17 @@
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
             [green.process :as process]
-            [io.github.getcolors.alice.sync :as sync]))
+            [io.github.getcolors.alice.sync :as sync]
+            [io.github.getcolors.once.ssh :as once-ssh]))
 
 (def providers
   {:provider-compute
+   ;; `digitalocean-ssh-keys` is deliberately absent from :required. Its
+   ;; presence is the only switch between opt-out and keygen mode (SSH Keypair
+   ;; Standard §1) — requiring it would make keygen mode unreachable.
    {"digitalocean" {:required [:digitalocean-name :digitalocean-region
                                 :digitalocean-size :digitalocean-image
-                                :digitalocean-vpc-uuid :digitalocean-ssh-keys]
+                                :digitalocean-vpc-uuid]
                     :secrets [:do-token]
                     :tofu-env {:do-token "DIGITALOCEAN_TOKEN"}}}
    :provider-backend
@@ -38,6 +42,13 @@
       (and (string? x)
            (or (str/blank? x) (= "REPLACE_ME" (str/upper-case x))))))
 
+(defn keygen?
+  "Whether this deployment owns its machine keypair. Delegates to ONCE, the
+  SSH Keypair Standard's reference implementation, so one rule decides it
+  everywhere."
+  [opts]
+  (once-ssh/keygen? opts))
+
 (defn entry [opts slot] (get-in providers [slot (get opts slot)]))
 (defn- slot-keys [opts field] (mapcat #(get (entry opts %) field []) slots))
 (defn- missing [opts ks] (keep #(when (placeholder? (get opts %)) %) ks))
@@ -52,7 +63,7 @@
 
 (def required-keys
   [:profile :workdir :provider-compute :provider-backend
-   :compute-prevent-destroy :package :ssh-identity-file
+   :compute-prevent-destroy :package
    :transmission-rpc-port :transmission-tunnel-local-port
    :transmission-local-directory :transmission-magnet-links])
 
@@ -72,9 +83,6 @@
       [":provider-compute must be digitalocean"])
     (when-not (= "alice" (:package opts))
       [":package must be alice"])
-    (when-not (and (string? (:ssh-identity-file opts))
-                   (not (str/blank? (:ssh-identity-file opts))))
-      [":ssh-identity-file must be a private-key path or agent"])
     (when-not (true? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must remain true in desired state"])
     (when-not (or (placeholder? (:profile opts))

@@ -12,16 +12,30 @@
    :digitalocean-size "s-1vcpu-1gb-35gb-intel"
    :digitalocean-image "ubuntu-24-04-x64"
    :digitalocean-vpc-uuid "00000000-0000-4000-8000-000000000000"
+   ;; An explicit key id: `base` is opt-out mode, the shape every existing
+   ;; deployment has. `keygen-base` below drops it, which is the only switch.
    :digitalocean-ssh-keys "812184"
-   :ssh-identity-file "~/.ssh/id_ed25519"
    :transmission-rpc-port 9091
    :transmission-tunnel-local-port 19091
    :transmission-local-directory "~/Downloads/alice"
    :transmission-magnet-links
    ["magnet:?xt=urn:btih:4cdce46e0cda3be676d4d3ae7ba1a1e42a24f2af&dn=fixture"]})
 
+(def keygen-base
+  "Keygen mode: the package owns the machine keypair because desired state
+  supplies no key. Presence of `digitalocean-ssh-keys` is the only switch."
+  (dissoc base :digitalocean-ssh-keys))
+
 (deftest complete-state-is-valid
   (is (= [] (validate/state-errors base))))
+
+(deftest keygen-mode-is-valid-state
+  ;; Requiring `digitalocean-ssh-keys` would make keygen mode unreachable.
+  (is (= [] (validate/state-errors keygen-base)))
+  (is (true? (validate/keygen? keygen-base)))
+  (is (false? (validate/keygen? base)))
+  ;; A blank value is a placeholder, not a supplied key.
+  (is (true? (validate/keygen? (assoc base :digitalocean-ssh-keys "")))))
 
 (deftest reports-all-missing-and-invalid-values
   (let [errors (validate/state-errors
