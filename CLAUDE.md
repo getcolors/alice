@@ -62,6 +62,15 @@ host the operator reaches and an unrelated upstream change must not rewrite it
 at pin-bump time. There is no rotation verb: Droplet key sets are ForceNew, so
 rotation is `delete` then `create`.
 
+The managed block is not what the remote stage connects with. `ansible.cfg`
+passes `-F /dev/null`, so the run cannot depend on a shared file the local
+stage is rewriting in the same create, and that also discards the block's
+`IdentityFile`. In keygen mode the rendered `inventory.json` therefore names
+`ansible_ssh_private_key_file` itself — a path, never key material, exactly as
+ONCE does. Remove it and a create succeeds only on a workstation whose agent
+already holds the generated key, and fails `Permission denied (publickey)`
+everywhere else.
+
 An existing `~/.ssh/<profile>` with no readable compute state is an error, never
 an overwrite — it may be the only credential to a Droplet that is still alive.
 Because `sync` destroys the Droplet on success, a run interrupted between the

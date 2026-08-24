@@ -77,10 +77,25 @@
           :ip (or (:ip opts) (:ip fallback-params))
           :user (or (:user opts) "root")}))
 
-(defn inventory [opts]
-  (let [{:keys [host-alias ip user]} (data-fn opts)]
+(defn inventory
+  "The remote inventory: one root host, and in keygen mode the path to the
+  machine key.
+
+  `ansible.cfg` runs the connection with `-F /dev/null` on purpose — the run
+  must not depend on `~/.ssh/config`, a file shared with every other host the
+  operator reaches and rewritten by the local stage while the run is in
+  flight. That isolation also discards the `IdentityFile` the managed block
+  names, so in keygen mode nothing offers the generated key unless an agent
+  happens to hold it, and a create that worked yesterday fails today with
+  `Permission denied (publickey)`. Naming the path here is what ONCE does for
+  the same reason (`once.tools/inventory`): a path, never key material."
+  [opts]
+  (let [{:keys [host-alias ip user ssh-private-key-path]} (data-fn opts)]
     (json/generate-string
-     {:all {:hosts {host-alias {:ansible_host ip :ansible_user user}}}}
+     {:all {:hosts {host-alias (cond-> {:ansible_host ip :ansible_user user}
+                                 (validate/keygen? opts)
+                                 (assoc :ansible_ssh_private_key_file
+                                        ssh-private-key-path))}}}
      {:pretty true})))
 
 (defn ansible-local-specs [opts]

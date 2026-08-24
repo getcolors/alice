@@ -21,7 +21,25 @@
     (is (= "203.0.113.10"
            (get-in parsed ["all" "hosts" "demo" "ansible_host"])))
     (is (= "root"
-           (get-in parsed ["all" "hosts" "demo" "ansible_user"])))))
+           (get-in parsed ["all" "hosts" "demo" "ansible_user"])))
+    ;; Opt-out mode: the operator supplied the key, so how ansible finds it is
+    ;; the operator's business and the inventory says nothing about it.
+    (is (not (contains? (get-in parsed ["all" "hosts" "demo"])
+                        "ansible_ssh_private_key_file")))))
+
+(deftest keygen-inventory-names-the-machine-key
+  ;; `ansible.cfg` connects with `-F /dev/null`, so the `IdentityFile` in the
+  ;; managed `~/.ssh/config` block never reaches the remote stage. Without this
+  ;; the run offers no identity at all and fails `Permission denied
+  ;; (publickey)` on every workstation whose agent does not already hold the
+  ;; generated key.
+  (let [parsed (json/parse-string
+                (tools/inventory
+                 (assoc vt/keygen-base :profile "demo" :ip "203.0.113.10"
+                        :ssh-private-key-path "/home/op/.ssh/demo")))]
+    (is (= "/home/op/.ssh/demo"
+           (get-in parsed ["all" "hosts" "demo"
+                           "ansible_ssh_private_key_file"])))))
 
 (deftest infrastructure-renders-droplet-with-guard-and-no-token
   (let [dir (temp-dir)
