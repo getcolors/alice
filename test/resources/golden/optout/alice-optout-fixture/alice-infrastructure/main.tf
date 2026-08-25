@@ -12,6 +12,8 @@ terraform {
 provider "digitalocean" {}
 
 resource "digitalocean_droplet" "alice" {
+  # The profile, unless desired state overrides it. Resolved before the render
+  # so this line never branches (Compute Name Standard §2).
   name     = "alice-test"
   region   = "ams3"
   size     = "s-1vcpu-1gb-35gb-intel"

@@ -3,7 +3,8 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [green.process :as process]
-            [io.github.getcolors.alice.utils :as utils]))
+            [io.github.getcolors.alice.utils :as utils]
+            [io.github.getcolors.alice.validate :as validate]))
 
 (defn- host-block [config alias]
   (when (and (not (str/blank? config)) (not (str/blank? alias)))
@@ -42,10 +43,13 @@
                                    "transmission-daemon"]))
          service (some-> (:out service-result) str/trim)]
      {:profile (:profile opts)
-      :droplet (select-keys opts [:digitalocean-name :digitalocean-region
-                                  :digitalocean-size :digitalocean-image
-                                  :digitalocean-vpc-uuid
-                                  :digitalocean-ssh-keys])
+      ;; The effective name, not the override key: describe should say what the
+      ;; Droplet is actually called.
+      :droplet (assoc (select-keys opts [:digitalocean-region
+                                         :digitalocean-size :digitalocean-image
+                                         :digitalocean-vpc-uuid
+                                         :digitalocean-ssh-keys])
+                      :compute-name (validate/compute-name opts))
       :ssh {:alias alias :config (utils/ssh-config-path)
             :present? (boolean block) :host (host-name block)
             :reachable? (boolean reachable?)}
@@ -58,7 +62,7 @@
 (defn print-report [{:keys [profile droplet ssh transmission tunnel]}]
   (println (str "Profile: " profile))
   (println (format "DigitalOcean: %s · %s · %s · %s"
-                   (:digitalocean-name droplet) (:digitalocean-region droplet)
+                   (:compute-name droplet) (:digitalocean-region droplet)
                    (:digitalocean-size droplet) (:digitalocean-image droplet)))
   (println (format "SSH: alias=%s configured=%s host=%s reachable=%s"
                    (:alias ssh) (:present? ssh) (or (:host ssh) "unknown")

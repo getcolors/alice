@@ -24,11 +24,20 @@ Both name the file and line and leave the decision to a human.
 ## Desired state
 
 Required keys select the unique profile/work directory, DigitalOcean compute,
-and local/S3/R2 state backend. DigitalOcean needs a Droplet name, region, size,
-and image.
+and local/S3/R2 state backend. DigitalOcean needs a region, size, and image —
+not a Droplet name, which defaults to the profile.
 
 Alice also accepts:
 
+- `digitalocean-name` — the Droplet's name. Omit it and the Droplet is named
+  after the profile, which is already what keys OpenTofu state, names the
+  machine keypair and its DigitalOcean registration, and serves as the
+  `~/.ssh/config` alias; the machine's own label should not be the one place
+  that disagrees. Supply one only for an account whose naming policy a profile
+  cannot satisfy, or an existing Droplet being adopted, and it is checked for
+  shape (`standards/compute-name.md`). Changing it renames the Droplet at
+  DigitalOcean but never the running guest's hostname, which cloud-init set at
+  creation — a name change takes effect on the next create;
 - `digitalocean-vpc-uuid` — an existing VPC UUID. Omit it and the region's
   default VPC is discovered at runtime through a `digitalocean_vpc` data
   source, with the apply asserting that the discovered VPC really is the
@@ -48,7 +57,8 @@ Alice also accepts:
   unique 40-character BTIH hash. The key is required but the list may be empty:
   `[]` is desired state meaning no torrent is wanted.
 
-Keep `package: alice` and `compute-prevent-destroy: true`.
+Keep `compute-prevent-destroy: true`. There is no `package` key: it could hold
+exactly one value, so desired state no longer carries it.
 `COLORS_PAR_COMPUTE_PREVENT_DESTROY` is ignored. The explicit `delete` event
 owns manual destruction authorization; `sync` owns only its successful final
 cleanup.

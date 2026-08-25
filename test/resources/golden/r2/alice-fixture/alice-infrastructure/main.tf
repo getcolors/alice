@@ -30,7 +30,9 @@ resource "digitalocean_ssh_key" "machine" {
 }
 
 resource "digitalocean_droplet" "alice" {
-  name     = "alice-test"
+  # The profile, unless desired state overrides it. Resolved before the render
+  # so this line never branches (Compute Name Standard §2).
+  name     = "alice-fixture"
   region   = "ams3"
   size     = "s-1vcpu-1gb-35gb-intel"
   image    = "ubuntu-24-04-x64"

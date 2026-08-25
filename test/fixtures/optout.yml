@@ -3,14 +3,16 @@
 # is generated, validated, or deleted, no account key resource is created, and
 # the ~/.ssh/config block carries no IdentityFile pair (standards/ssh-keypair.md
 # §1, standards/ssh-config.md §3). digitalocean-vpc-uuid means the compute
-# template declares no VPC data source and no postcondition.
+# template declares no VPC data source and no postcondition. digitalocean-name
+# means the Droplet takes that label instead of the profile, which is the
+# override side of standards/compute-name.md — this fixture carries every
+# opt-out so one golden proves them all.
 profile: alice-optout-fixture
 workdir: .colors
 provider-compute: digitalocean
 provider-dns: false
 provider-backend: r2
 compute-prevent-destroy: true
-package: alice
 
 digitalocean-name: alice-test
 digitalocean-region: ams3

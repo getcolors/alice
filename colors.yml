@@ -6,8 +6,9 @@ provider-dns: false
 provider-backend: local
 compute-prevent-destroy: true
 
-package: alice
-digitalocean-name: alice
+# No digitalocean-name: the Droplet is named after the profile, which is what
+# already keys state, the machine keypair, and the ~/.ssh/config alias. Supply
+# one only to override that label (standards/compute-name.md).
 digitalocean-region: ams3
 digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-24-04-x64

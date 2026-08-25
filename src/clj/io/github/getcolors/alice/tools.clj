@@ -37,7 +37,8 @@
         data (assoc opts
                     :compute-prevent-destroy (not= :delete (:green/event opts))
                     :ssh-keygen (validate/keygen? opts)
-                    :vpc-discovery (validate/vpc-discovery? opts))]
+                    :vpc-discovery (validate/vpc-discovery? opts)
+                    :compute-name (validate/compute-name opts))]
     [(spec (template "infrastructure" "main.tf")
            (str dir "/main.tf") data)]))
 

@@ -7,8 +7,7 @@
   {:profile "alice-test" :workdir ".colors"
    :provider-compute "digitalocean" :provider-dns false
    :provider-backend "local" :compute-prevent-destroy true
-   :package "alice"
-   :digitalocean-name "alice" :digitalocean-region "ams3"
+   :digitalocean-region "ams3"
    :digitalocean-size "s-1vcpu-1gb-35gb-intel"
    :digitalocean-image "ubuntu-24-04-x64"
    :digitalocean-vpc-uuid "00000000-0000-4000-8000-000000000000"
@@ -84,11 +83,32 @@
              (assoc base :transmission-magnet-links
                     (vec (repeat 2 (first (:transmission-magnet-links base)))))))))
 
-(deftest provider-package-and-ports-are-fixed
+(deftest compute-name-defaults-to-the-profile
+  ;; The profile is the deployment's identity everywhere else — state key,
+  ;; machine keypair, SSH alias — so the Droplet must not disagree.
+  (is (= "alice-test" (validate/compute-name base)))
+  (is (= "alice-test" (validate/compute-name (assoc base :digitalocean-name ""))))
+  (is (= "alice-test"
+         (validate/compute-name (assoc base :digitalocean-name "REPLACE_ME")))))
+
+(deftest compute-name-override-is-optional-and-checked
+  ;; Presence is the only switch, and an absent override is not an error.
+  (is (= "adopted-droplet"
+         (validate/compute-name (assoc base :digitalocean-name "adopted-droplet"))))
+  (is (empty? (filter #(str/includes? % ":digitalocean-name")
+                      (validate/state-errors base))))
+  (is (some #(str/includes? % ":digitalocean-name")
+            (validate/state-errors (assoc base :digitalocean-name "bad name!")))))
+
+(deftest package-key-is-no-longer-desired-state
+  ;; It could hold exactly one value, so requiring it asked for a transcription.
+  (is (empty? (filter #(str/includes? % ":package") (validate/state-errors base))))
+  (is (empty? (filter #(str/includes? % ":package")
+                      (validate/state-errors (dissoc base :package))))))
+
+(deftest provider-and-ports-are-fixed
   (is (some #(str/includes? % "digitalocean")
             (validate/state-errors (assoc base :provider-compute "oci"))))
-  (is (some #(str/includes? % ":package")
-            (validate/state-errors (assoc base :package "other"))))
   (is (some #(str/includes? % "tunnel-local-port")
             (validate/state-errors
              (assoc base :transmission-tunnel-local-port "19091")))))

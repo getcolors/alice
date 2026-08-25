@@ -112,6 +112,12 @@ always refused. Keep `compute-prevent-destroy: true` in desired state;
 manual destruction. `sync` authorizes destruction only after every desired
 torrent is complete and the final checksummed rsync succeeds.
 
+The Droplet is named after the profile (`standards/compute-name.md`).
+`digitalocean-name` is an optional override, resolved once by
+`validate/compute-name` so the template renders one value and never branches —
+the same "presence is the only switch" shape as the VPC and the keypair. There
+is no `package` key in desired state: it could hold exactly one value.
+
 `transmission-magnet-links` may be empty. `[]` is desired state — no torrent is
 wanted — not a validation failure, so `create` still provisions the private UI.
 It does mean `sync` satisfies its desired set on the first `torrent-get` and

@@ -8,12 +8,14 @@
 
 (def providers
   {:provider-compute
-   ;; Two keys are deliberately absent from :required, and in both cases their
+   ;; Three keys are deliberately absent from :required, and in each case their
    ;; presence is the only switch. `digitalocean-ssh-keys` chooses between
    ;; opt-out and keygen mode (SSH Keypair Standard §1). `digitalocean-vpc-uuid`
    ;; chooses between a pinned VPC and discovering the region's default one at
-   ;; runtime. Requiring either would make the discovering side unreachable.
-   {"digitalocean" {:required [:digitalocean-name :digitalocean-region
+   ;; runtime. `digitalocean-name` overrides the profile as the Droplet's name
+   ;; (Compute Name Standard §2). Requiring any of them would make the
+   ;; defaulting side unreachable.
+   {"digitalocean" {:required [:digitalocean-region
                                 :digitalocean-size :digitalocean-image]
                     :secrets [:do-token]
                     :tofu-env {:do-token "DIGITALOCEAN_TOKEN"}}}
@@ -55,6 +57,21 @@
   [opts]
   (placeholder? (:digitalocean-vpc-uuid opts)))
 
+(defn compute-name
+  "The Droplet's name. The profile is the deployment's identity — it keys remote
+  state, names the machine keypair and its DigitalOcean registration, and is the
+  `~/.ssh/config` alias an operator types — so the machine's own label must not
+  be the one place that disagrees (Compute Name Standard §1).
+
+  `digitalocean-name` overrides it for an account whose naming policy a profile
+  cannot satisfy, or an existing Droplet being adopted. Presence is the only
+  switch, exactly as it is for the VPC and the keypair. Resolving it here means
+  the template renders one value and never branches (§2)."
+  [opts]
+  (if (placeholder? (:digitalocean-name opts))
+    (str (:profile opts))
+    (str (:digitalocean-name opts))))
+
 (defn keygen?
   "Whether this deployment owns its machine keypair. Delegates to ONCE, the
   SSH Keypair Standard's reference implementation, so one rule decides it
@@ -71,12 +88,16 @@
     [(str profile-par " is set. Alice takes profile from colors.yml only; "
           "an environment overlay could redirect OpenTofu state.")]))
 
-(def ^:private profile-re #"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+(def ^:private name-re #"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
+(def ^:private profile-re name-re)
 (def ^:private uuid-re #"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 (def required-keys
+  ;; No `:package`. It could hold exactly one value, which the defaults already
+  ;; supply, so requiring it in desired state asked an operator to transcribe a
+  ;; constant (Compute Name Standard §5).
   [:profile :workdir :provider-compute :provider-backend
-   :compute-prevent-destroy :package
+   :compute-prevent-destroy
    :transmission-rpc-port :transmission-tunnel-local-port
    :transmission-local-directory :transmission-magnet-links])
 
@@ -94,8 +115,6 @@
       (str "unsupported " slot " " (pr-str provider)))
     (when-not (= "digitalocean" (:provider-compute opts))
       [":provider-compute must be digitalocean"])
-    (when-not (= "alice" (:package opts))
-      [":package must be alice"])
     (when-not (true? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must remain true in desired state"])
     (when-not (or (placeholder? (:profile opts))
@@ -104,6 +123,11 @@
     (when (and (not (placeholder? (:digitalocean-vpc-uuid opts)))
                (not (re-matches uuid-re (str (:digitalocean-vpc-uuid opts)))))
       [":digitalocean-vpc-uuid must be a UUID"])
+    ;; The override is read, not passed through. An unusable Droplet name is
+    ;; worth catching here rather than as a provider error mid-apply.
+    (when (and (not (placeholder? (:digitalocean-name opts)))
+               (not (re-matches name-re (str (:digitalocean-name opts)))))
+      [":digitalocean-name must be a safe 1-63 character name"])
     (for [k [:transmission-rpc-port :transmission-tunnel-local-port]
           :when (not (valid-port? (get opts k)))]
       (str k " must be an integer from 1 to 65535"))

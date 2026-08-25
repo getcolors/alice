@@ -2,16 +2,15 @@
 # No digitalocean-ssh-keys: the package owns the machine keypair per
 # standards/ssh-keypair.md and declares the profile-named digitalocean_ssh_key
 # resource. No digitalocean-vpc-uuid: the region's default VPC is discovered at
-# runtime through a data source.
+# runtime through a data source. No digitalocean-name: the Droplet takes the
+# profile, which is the defaulting side of standards/compute-name.md.
 profile: alice-fixture
 workdir: .colors
 provider-compute: digitalocean
 provider-dns: false
 provider-backend: r2
 compute-prevent-destroy: true
-package: alice
 
-digitalocean-name: alice-test
 digitalocean-region: ams3
 digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-24-04-x64

@@ -17,7 +17,6 @@
    :provider-compute "digitalocean"
    :provider-dns false
    :provider-backend "local"
-   :package "alice"
    :workdir ".colors"
    :transmission-rpc-port 9091
    :transmission-tunnel-local-port 19091})

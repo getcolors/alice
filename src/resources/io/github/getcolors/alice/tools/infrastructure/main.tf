@@ -30,7 +30,9 @@ resource "digitalocean_ssh_key" "machine" {
 }
 
 <% endif %>resource "digitalocean_droplet" "alice" {
-  name     = "<{ digitalocean-name }>"
+  # The profile, unless desired state overrides it. Resolved before the render
+  # so this line never branches (Compute Name Standard §2).
+  name     = "<{ compute-name }>"
   region   = "<{ digitalocean-region }>"
   size     = "<{ digitalocean-size }>"
   image    = "<{ digitalocean-image }>"
