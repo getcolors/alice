@@ -142,8 +142,12 @@
                 (ssh-command opts "systemctl" "stop" "transmission-daemon")))
 
 (defn- add-magnets! [opts session]
-  (doseq [magnet (:transmission-magnet-links opts)]
-    (rpc-call opts session "torrent-add" {:filename magnet})))
+  (let [magnets (:transmission-magnet-links opts)]
+    (when (empty? magnets)
+      (println "No desired magnet links; nothing to download.")
+      (flush))
+    (doseq [magnet magnets]
+      (rpc-call opts session "torrent-add" {:filename magnet}))))
 
 (defn- await-downloads! [opts session destination]
   (let [desired (set (map magnet-info-hash (:transmission-magnet-links opts)))
@@ -180,7 +184,9 @@
                        (:transmission-tunnel-local-port opts)))
       (flush)
       (let [session (atom nil)]
-        ;; The first RPC call also proves that the tunnel and private RPC UI work.
+        ;; The first RPC call also proves that the tunnel and private RPC UI
+        ;; work. With no desired magnet that call is the `torrent-get` below,
+        ;; which still runs before the empty desired set is satisfied.
         (add-magnets! opts session)
         (await-downloads! opts session destination)
         (stop-transmission! opts)

@@ -67,15 +67,22 @@
     (is (some #(str/includes? % ":digitalocean-vpc-uuid") errors))))
 
 (deftest magnets-and-local-directory-are-validated
-  (is (some #(str/includes? % "non-empty YAML list")
-            (validate/state-errors (assoc base :transmission-magnet-links []))))
+  ;; An empty list is desired state — no torrent is wanted — so it must not
+  ;; raise any error about the key.
+  (is (empty? (filter #(str/includes? % ":transmission-magnet-links")
+                      (validate/state-errors
+                       (assoc base :transmission-magnet-links [])))))
+  (is (some #(str/includes? % "must be a YAML list")
+            (validate/state-errors
+             (assoc base :transmission-magnet-links
+                    (first (:transmission-magnet-links base))))))
   (is (some #(str/includes? % "40-character BTIH")
             (validate/state-errors
              (assoc base :transmission-magnet-links ["magnet:?dn=missing-hash"]))))
   (is (some #(str/includes? % "unique BTIH")
             (validate/state-errors
              (assoc base :transmission-magnet-links
-                    (repeat 2 (first (:transmission-magnet-links base))))))))
+                    (vec (repeat 2 (first (:transmission-magnet-links base)))))))))
 
 (deftest provider-package-and-ports-are-fixed
   (is (some #(str/includes? % "digitalocean")

@@ -109,15 +109,21 @@
       (str k " must be an integer from 1 to 65535"))
     (when (placeholder? (:transmission-local-directory opts))
       [":transmission-local-directory must be a non-empty path"])
-    (when-not (and (vector? (:transmission-magnet-links opts))
-                   (seq (:transmission-magnet-links opts)))
-      [":transmission-magnet-links must be a non-empty YAML list"])
-    (for [[index magnet] (map-indexed vector (:transmission-magnet-links opts))
-          :when (or (not (string? magnet))
-                    (str/includes? (str magnet) "\n")
-                    (nil? (sync/magnet-info-hash magnet)))]
-      (str ":transmission-magnet-links[" index
-           "] must be a magnet URI with a 40-character BTIH hash"))
+    ;; An empty list is desired state, not a mistake: it says no torrent is
+    ;; wanted. `create` still provisions the private UI, and `sync` degenerates
+    ;; into provision, prove the UI, copy, destroy with nothing to wait for.
+    (when-not (vector? (:transmission-magnet-links opts))
+      [":transmission-magnet-links must be a YAML list"])
+    ;; Only a list has items to report on. A bare string is already answered by
+    ;; the error above, and indexing into it would report one error per
+    ;; character.
+    (when (sequential? (:transmission-magnet-links opts))
+      (for [[index magnet] (map-indexed vector (:transmission-magnet-links opts))
+            :when (or (not (string? magnet))
+                      (str/includes? (str magnet) "\n")
+                      (nil? (sync/magnet-info-hash magnet)))]
+        (str ":transmission-magnet-links[" index
+             "] must be a magnet URI with a 40-character BTIH hash")))
     (when (and (sequential? (:transmission-magnet-links opts))
                (not= (count (:transmission-magnet-links opts))
                      (count (distinct (keep sync/magnet-info-hash

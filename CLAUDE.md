@@ -112,6 +112,12 @@ always refused. Keep `compute-prevent-destroy: true` in desired state;
 manual destruction. `sync` authorizes destruction only after every desired
 torrent is complete and the final checksummed rsync succeeds.
 
+`transmission-magnet-links` may be empty. `[]` is desired state — no torrent is
+wanted — not a validation failure, so `create` still provisions the private UI.
+It does mean `sync` satisfies its desired set on the first `torrent-get` and
+tears the Droplet down after one copy; `create` plus `tunnel` is the verb pair
+for a UI meant to stay open.
+
 The package owns its DigitalOcean template and depends on Green and on ONCE for
 the keypair implementation alone. The UI is
 not a public service: Transmission RPC binds 127.0.0.1, RPC password auth is

@@ -44,8 +44,9 @@ Alice also accepts:
 - `transmission-tunnel-local-port` — default local forwarding port, normally 19091;
 - `transmission-local-directory` — local destination that directly receives the
   contents of Transmission's download directory;
-- `transmission-magnet-links` — non-empty list of quoted public magnet URIs,
-  each with a unique 40-character BTIH hash.
+- `transmission-magnet-links` — list of quoted public magnet URIs, each with a
+  unique 40-character BTIH hash. The key is required but the list may be empty:
+  `[]` is desired state meaning no torrent is wanted.
 
 Keep `package: alice` and `compute-prevent-destroy: true`.
 `COLORS_PAR_COMPUTE_PREVENT_DESTROY` is ignored. The explicit `delete` event
@@ -70,7 +71,11 @@ completes; otherwise the state needed to address the Droplet is lost.
 `sync` creates or resumes the deployment, opens and prints the private UI
 tunnel, adds missing desired magnets, and rsyncs whenever another desired
 torrent completes. Once all are complete it stops Transmission and performs a
-checksummed final rsync before deleting the Droplet. Rsync copies the remote
+checksummed final rsync before deleting the Droplet. With an empty
+`transmission-magnet-links` the desired set is satisfied immediately, so `sync`
+provisions, proves the UI over the tunnel, copies the download directory as it
+stands, and then deletes — use `create` and `tunnel` instead when the intent is
+a UI to keep open. Rsync copies the remote
 directory contents directly into the local destination, supports partial
 transfers, and never uses `--delete`. Any failure or interruption retains the
 Droplet and state for a retry.
