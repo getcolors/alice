@@ -23,9 +23,12 @@
     (is (= "root"
            (get-in parsed ["all" "hosts" "demo" "ansible_user"])))
     ;; Opt-out mode: the operator supplied the key, so how ansible finds it is
-    ;; the operator's business and the inventory says nothing about it.
+    ;; the operator's business and the inventory says nothing about it — not
+    ;; the key path, and not any agent bypass either.
     (is (not (contains? (get-in parsed ["all" "hosts" "demo"])
-                        "ansible_ssh_private_key_file")))))
+                        "ansible_ssh_private_key_file")))
+    (is (not (contains? (get-in parsed ["all" "hosts" "demo"])
+                        "ansible_ssh_common_args")))))
 
 (deftest keygen-inventory-names-the-machine-key
   ;; `ansible.cfg` connects with `-F /dev/null`, so the `IdentityFile` in the
@@ -39,7 +42,15 @@
                         :ssh-private-key-path "/home/op/.ssh/demo")))]
     (is (= "/home/op/.ssh/demo"
            (get-in parsed ["all" "hosts" "demo"
-                           "ansible_ssh_private_key_file"])))))
+                           "ansible_ssh_private_key_file"])))
+    ;; And offers that key alone. Without `IdentitiesOnly` the agent's keys go
+    ;; first, and stale copies of superseded machine keys — banked by
+    ;; `AddKeysToAgent`, outliving the deleted file — exhaust `MaxAuthTries`
+    ;; as `Too many authentication failures` before the named key is tried.
+    ;; `IdentityAgent none` also keeps this run from banking another copy.
+    (is (= "-o IdentitiesOnly=yes -o IdentityAgent=none"
+           (get-in parsed ["all" "hosts" "demo"
+                           "ansible_ssh_common_args"])))))
 
 (deftest infrastructure-renders-droplet-with-guard-and-no-token
   (let [dir (temp-dir)

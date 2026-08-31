@@ -49,7 +49,8 @@ The package implements the workspace standards `standards/ssh-keypair.md` and
 is keygen mode and the only switch: the package generates
 `~/.ssh/<profile>`(`.pub`), declares a `digitalocean_ssh_key` named after the
 profile in its own state, writes a `~/.ssh/config` block aliased `<profile>`
-with `IdentityFile`/`IdentitiesOnly`, and removes all of it on the way out.
+with `IdentityFile`/`IdentitiesOnly`/`IdentityAgent none`, and removes all of
+it on the way out.
 Supplying an explicit key id is opt-out: no key material is generated,
 validated, or deleted, no account key resource is created, and the block carries
 no `IdentityFile`, because the operator has their own arrangements for finding
@@ -69,7 +70,15 @@ stage is rewriting in the same create, and that also discards the block's
 `ansible_ssh_private_key_file` itself — a path, never key material, exactly as
 ONCE does. Remove it and a create succeeds only on a workstation whose agent
 already holds the generated key, and fails `Permission denied (publickey)`
-everywhere else.
+everywhere else. The keygen inventory also carries
+`ansible_ssh_common_args: -o IdentitiesOnly=yes -o IdentityAgent=none`: the
+generated key is passphrase-less and ephemeral, so the agent contributes
+nothing, while stale agent copies of superseded machine keys — banked by
+`AddKeysToAgent`, outliving the deleted file — would otherwise be offered
+first and exhaust `MaxAuthTries` as `Too many authentication failures`.
+`IdentityAgent none` in both the inventory and the managed block keeps the
+agent out of every path the package owns; opt-out mode says nothing, because
+the operator's own key arrangements may include the agent.
 
 An existing `~/.ssh/<profile>` with no readable compute state is an error, never
 an overwrite — it may be the only credential to a Droplet that is still alive.

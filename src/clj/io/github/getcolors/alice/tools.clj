@@ -89,14 +89,26 @@
   names, so in keygen mode nothing offers the generated key unless an agent
   happens to hold it, and a create that worked yesterday fails today with
   `Permission denied (publickey)`. Naming the path here is what ONCE does for
-  the same reason (`once.tools/inventory`): a path, never key material."
+  the same reason (`once.tools/inventory`): a path, never key material.
+
+  The key alone is not enough: without `IdentitiesOnly` the agent's keys are
+  offered ahead of it, and stale copies of superseded machine keys — added by
+  a workstation's `AddKeysToAgent` and outliving the deleted file — exhaust
+  the server's `MaxAuthTries` as `Too many authentication failures` before
+  the named key is reached. The generated key is passphrase-less and
+  ephemeral, so the agent contributes nothing here; `IdentityAgent none`
+  both ignores it and keeps this connection from feeding it another copy.
+  Opt-out mode stays silent: the operator supplied the key, and how their
+  ssh finds it — agent included — is their arrangement to keep."
   [opts]
   (let [{:keys [host-alias ip user ssh-private-key-path]} (data-fn opts)]
     (json/generate-string
      {:all {:hosts {host-alias (cond-> {:ansible_host ip :ansible_user user}
                                  (validate/keygen? opts)
                                  (assoc :ansible_ssh_private_key_file
-                                        ssh-private-key-path))}}}
+                                        ssh-private-key-path
+                                        :ansible_ssh_common_args
+                                        "-o IdentitiesOnly=yes -o IdentityAgent=none"))}}}
      {:pretty true})))
 
 (defn ansible-local-specs [opts]

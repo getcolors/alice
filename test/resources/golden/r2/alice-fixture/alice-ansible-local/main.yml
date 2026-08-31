@@ -10,8 +10,14 @@
 # The variables here are Ansible's, not Selmer's: host_alias, ip, user and
 # block_state arrive as extra-vars at execution time, so `build` renders the
 # same bytes whether or not the Droplet exists and the goldens carry no
-# address (§6). The one Selmer conditional is the IdentityFile pair, because
+# address (§6). The one Selmer conditional is the IdentityFile group, because
 # whether the package owns a key is desired state that a build does know.
+# `IdentityAgent none` rides in that group: the generated key is
+# passphrase-less and ephemeral, so the agent adds nothing, and a
+# workstation's `AddKeysToAgent` would otherwise bank a copy that outlives
+# the deleted file and jams later runs with `Too many authentication
+# failures`. In opt-out mode the operator's own key arrangements — agent
+# included — are left alone.
 - name: Manage local Alice access
   hosts: local
   tasks:
@@ -55,5 +61,6 @@
               Port 22
               IdentityFile ~/.ssh/alice-fixture
               IdentitiesOnly yes
+              IdentityAgent none
               StrictHostKeyChecking accept-new
               ForwardAgent no
