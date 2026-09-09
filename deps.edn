@@ -3,7 +3,7 @@
         io.github.getcolors/green {:git/url "https://github.com/getcolors/green.git"
                                    :git/sha "3f33f5d4dcce1f8d97a11b6972e13eb3f0b37654"}
         io.github.getcolors/colors-compute  {:git/url "https://github.com/getcolors/colors-compute.git"
-                                   :git/sha "422c3f39d22be93efa703da09eb192490942ede3"
+                                   :git/sha "5040d93672b9f10e7861f527ea552177369c6851"
                                    :deps/root "green"}}
  :aliases {:dev {:extra-paths ["test/clj" "test/resources"]}
            :test {:extra-paths ["test/clj" "test/resources"]
