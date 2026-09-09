@@ -25,7 +25,7 @@
    (is (= 1 (:green/exit (wf/run workflow/workflow (assoc vt/base :green/event :sync)))))
    (is (empty? @calls)))))
 (deftest inspection-failure-prevents-delete
- (with-redefs [inspection/read-deployment (fn [& _] {:status "error"})]
+ (with-redefs [inspection/read-deployment (fn [_ env deps _] (is (map? env)) (is (contains? env "HOME")) (is (= {} deps)) {:status "error"})]
   (is (= 1 (:green/exit (tools/load-infrastructure-step (assoc vt/base :green/event :delete)))))))
 (deftest whole-build-default-and-referenced-vpc
  (doseq [base [vt/base vt/discovery-base vt/keygen-base]]
