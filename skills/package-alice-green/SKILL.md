@@ -45,3 +45,11 @@ ownership, default or explicit VPC selection, and remote S3/R2 state. Alice
 passes a singleton topology and application firewall policy. Existing monolithic
 `<profile>/alice-infrastructure.tfstate` deployments require explicit migration.
 The SSH config play remains package-owned and serializes atomic updates.
+
+### Repeated deletion after compute retirement
+
+A repeated `delete` with validated retired compute ownership resumes only the
+local generated-file cleanup. It does not require removed SSH keys or contact
+the former hosts, DNS, registry, or other application cloud resources. Failed
+ownership inspection still stops deletion. Local cleanup preserves unrelated
+files and is safe to repeat.

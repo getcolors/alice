@@ -163,6 +163,9 @@
         {} 180000)))))
 
 (defn generated-cleanup-step [opts]
-  (-> opts
-      (sc/scaffold (ansible-remote-specs opts))
-      (sc/scaffold (acceptance-specs opts))))
+  ;; Fixed generated targets need no inventory or removed SSH identity.
+  (if (= :delete (:green/event opts))
+    (sc/scaffold opts
+      (vec (for [[tool names] [[ansible-remote-tool ["ansible.cfg" "main.yml" "inventory.json"]] [acceptance-tool ["acceptance.sh"]]] name names]
+        (raw-spec (str (tool-dir opts tool) "/" name) ""))))
+    opts))

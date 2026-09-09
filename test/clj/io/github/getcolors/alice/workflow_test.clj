@@ -49,3 +49,31 @@
           (assoc vt/base :alice-ssh-sources [])
           (io.github.getcolors.alice.compute/topology vt/base)
           (io.github.getcolors.alice.compute/requirements (assoc vt/base :alice-ssh-sources []))))))
+
+(deftest retired-resumes-only-idempotent-local-cleanup
+  (let [dir (.toFile (java.nio.file.Files/createTempDirectory "alice-retired-" (make-array java.nio.file.attribute.FileAttribute 0)))
+        opts {:profile "retired" :workdir (str dir) :green/event :delete}
+        paths [(io/file (tools/tool-dir opts tools/acceptance-tool) "acceptance.sh")]
+        keep (io/file dir "keep") seen (atom []) inspection-exit (atom 0)
+        native (wf/workflow {:start :alice/start :next-fn workflow/next-steps
+          :wire-fn (fn [step current]
+            (case step
+              :alice/start [(fn [o] (swap! seen conj step) (assoc o :green/exit 0)) :alice/load-infrastructure]
+              :alice/load-infrastructure [(fn [o] (swap! seen conj step) (assoc o :green/exit @inspection-exit :alice/already-destroyed true)) :forbidden/remote]
+              :alice/generated-cleanup [(fn [o] (swap! seen conj step) ((first (workflow/wire-fn step o)) o))]
+              [(fn [_] (throw (ex-info "unexpected remote stage" {:step step})))]))})]
+    (try
+      (doseq [path paths] (io/make-parents path) (spit path "synthetic leftover"))
+      (spit keep "unrelated")
+      (dotimes [_ 2]
+        (reset! seen [])
+        (is (zero? (:green/exit (wf/run native opts))))
+        (is (= [:alice/start :alice/load-infrastructure :alice/generated-cleanup] @seen))
+        (is (every? #(not (.exists %)) paths))
+        (is (= "unrelated" (slurp keep))))
+      (reset! inspection-exit 1) (reset! seen [])
+      (is (= 1 (:green/exit (wf/run native opts))))
+      (is (= [:alice/start :alice/load-infrastructure] @seen))
+      (is (= [] (workflow/next-steps :alice/load-infrastructure [:forbidden/remote] (assoc opts :green/exit 1 :alice/already-destroyed true))))
+      (is (not (.exists (io/file dir ".ssh"))))
+      (finally (doseq [f (reverse (file-seq dir))] (io/delete-file f true))))))

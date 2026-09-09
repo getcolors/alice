@@ -136,8 +136,16 @@
    :alice/sync-generated-cleanup
    :alice/generated-cleanup])
 
+(defn next-steps [step successors opts]
+  (cond
+    (wf/failed? opts) []
+    (:alice/already-destroyed opts)
+    (if (and (= :delete (:green/event opts)) (= :alice/load-infrastructure step))
+      [[:alice/generated-cleanup opts]] [])
+    :else (mapv #(vector % opts) successors)))
+
 (def workflow
   (-> (wf/workflow {:start :alice/start :wire-fn wire-fn
-                    :next-fn (fn [_ successors opts] (if (or (wf/failed? opts) (:alice/already-destroyed opts)) [] (mapv #(vector % opts) successors)))})
+                    :next-fn next-steps})
       progress/advise
       (dry-run/advise side-effecting-steps)))
