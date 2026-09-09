@@ -89,3 +89,8 @@
                          (get-in config [:extra-vars :ssh_hosts])))
                   (is (= "alice" (get-in config [:extra-vars :ssh_legacy_marker_prefix]))) opts)]
     (tools/ansible-local-step (assoc vt/base :green/event :build))))
+
+(deftest compute-json-accepts-library-mixed-key-maps
+  (is (= {"backups" true "region" "ams"}
+         (cheshire.core/parse-string
+          (#'io.github.getcolors.alice.tools/compute-json {:region "ams" "backups" true} 0)))))
