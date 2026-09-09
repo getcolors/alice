@@ -4,33 +4,12 @@
             [green.cli :as green-cli]
             [green.process :as process]
             [io.github.getcolors.alice.sync :as sync]
-            [io.github.getcolors.once.ssh :as once-ssh]))
+            [io.github.getcolors.compute-ssh :as ssh]
+            [io.github.getcolors.compute :as library]
+            [io.github.getcolors.compute-planning :as planning]
+            [io.github.getcolors.compute-deployment-request :as deployment]
+            [io.github.getcolors.alice.compute :as compute]))
 
-(def providers
-  {:provider-compute
-   ;; Three keys are deliberately absent from :required, and in each case their
-   ;; presence is the only switch. `digitalocean-ssh-keys` chooses between
-   ;; opt-out and keygen mode (SSH Keypair Standard §1). `digitalocean-vpc-uuid`
-   ;; chooses between a pinned VPC and discovering the region's default one at
-   ;; runtime. `digitalocean-name` overrides the profile as the Droplet's name
-   ;; (Compute Name Standard §2). Requiring any of them would make the
-   ;; defaulting side unreachable.
-   {"digitalocean" {:required [:digitalocean-region
-                                :digitalocean-size :digitalocean-image]
-                    :secrets [:do-token]
-                    :tofu-env {:do-token "DIGITALOCEAN_TOKEN"}}}
-   :provider-backend
-   {"local" {:required [] :secrets [] :tofu-env {}}
-    "s3" {:required [:s3-bucket :s3-region]
-          :secrets [:s3-access-key-id :s3-secret-access-key]
-          :tofu-env {:s3-access-key-id "AWS_ACCESS_KEY_ID"
-                     :s3-secret-access-key "AWS_SECRET_ACCESS_KEY"}}
-    "r2" {:required [:r2-bucket :r2-endpoint]
-          :secrets [:r2-access-key-id :r2-secret-access-key]
-          :tofu-env {:r2-access-key-id "AWS_ACCESS_KEY_ID"
-                     :r2-secret-access-key "AWS_SECRET_ACCESS_KEY"}}}})
-
-(def slots [:provider-compute :provider-backend])
 (def profile-par (green-cli/par-name :profile))
 (def prevent-destroy-par (green-cli/par-name :compute-prevent-destroy))
 
@@ -45,42 +24,9 @@
       (and (string? x)
            (or (str/blank? x) (= "REPLACE_ME" (str/upper-case x))))))
 
-(defn vpc-discovery?
-  "Whether the region's default VPC is discovered at runtime, rather than
-  pinned in desired state.
-
-  Discovery is the default because a UUID is an opaque account-specific value
-  that says nothing a reader can check, goes stale silently when an account
-  changes, and has to be looked up by hand before a deployment can exist at
-  all. The region already determines the answer. Supplying an explicit UUID
-  remains the escape hatch for a VPC that is not the regional default."
-  [opts]
-  (placeholder? (:digitalocean-vpc-uuid opts)))
-
-(defn compute-name
-  "The Droplet's name. The profile is the deployment's identity — it keys remote
-  state, names the machine keypair and its DigitalOcean registration, and is the
-  `~/.ssh/config` alias an operator types — so the machine's own label must not
-  be the one place that disagrees (Compute Name Standard §1).
-
-  `digitalocean-name` overrides it for an account whose naming policy a profile
-  cannot satisfy, or an existing Droplet being adopted. Presence is the only
-  switch, exactly as it is for the VPC and the keypair. Resolving it here means
-  the template renders one value and never branches (§2)."
-  [opts]
-  (if (placeholder? (:digitalocean-name opts))
-    (str (:profile opts))
-    (str (:digitalocean-name opts))))
-
-(defn keygen?
-  "Whether this deployment owns its machine keypair. Delegates to ONCE, the
-  SSH Keypair Standard's reference implementation, so one rule decides it
-  everywhere."
-  [opts]
-  (once-ssh/keygen? opts))
-
-(defn entry [opts slot] (get-in providers [slot (get opts slot)]))
-(defn- slot-keys [opts field] (mapcat #(get (entry opts %) field []) slots))
+(defn compute-name [opts]
+  (get-in (deployment/deployment-requests opts (compute/topology opts) (compute/requirements opts) {:mode "managed" :public_key "ssh-ed25519 PLACEHOLDER managed-by-colors"}) [:shared :name]))
+(defn keygen? [opts] (= "managed" (:mode (ssh/mode opts))))
 (defn- missing [opts ks] (keep #(when (placeholder? (get opts %)) %) ks))
 
 (defn env-errors [env]
@@ -108,26 +54,12 @@
   (vec
    (concat
     (map #(str % " is required")
-         (missing opts (concat required-keys (slot-keys opts :required))))
-    (for [slot slots
-          :let [provider (get opts slot)]
-          :when (not (contains? (get providers slot) provider))]
-      (str "unsupported " slot " " (pr-str provider)))
-    (when-not (= "digitalocean" (:provider-compute opts))
-      [":provider-compute must be digitalocean"])
+         (missing opts required-keys))
     (when-not (true? (:compute-prevent-destroy opts))
       [":compute-prevent-destroy must remain true in desired state"])
     (when-not (or (placeholder? (:profile opts))
                   (re-matches profile-re (str (:profile opts))))
       [":profile must be a safe 1-63 character name"])
-    (when (and (not (placeholder? (:digitalocean-vpc-uuid opts)))
-               (not (re-matches uuid-re (str (:digitalocean-vpc-uuid opts)))))
-      [":digitalocean-vpc-uuid must be a UUID"])
-    ;; The override is read, not passed through. An unusable Droplet name is
-    ;; worth catching here rather than as a provider error mid-apply.
-    (when (and (not (placeholder? (:digitalocean-name opts)))
-               (not (re-matches name-re (str (:digitalocean-name opts)))))
-      [":digitalocean-name must be a safe 1-63 character name"])
     (for [k [:transmission-rpc-port :transmission-tunnel-local-port]
           :when (not (valid-port? (get opts k)))]
       (str k " must be an integer from 1 to 65535"))
@@ -152,82 +84,23 @@
                (not= (count (:transmission-magnet-links opts))
                      (count (distinct (keep sync/magnet-info-hash
                                             (:transmission-magnet-links opts))))))
-      [":transmission-magnet-links must have unique BTIH hashes"]))))
+      [":transmission-magnet-links must have unique BTIH hashes"])
+    (try (library/backend-plan opts (str (:profile opts) "/compute/shared.tfstate")) [] (catch Exception e [(ex-message e)])))))
 
 (defn secret-errors [opts]
-  (map #(str "required credential is not set: " (green-cli/par-name %))
-       (distinct (missing opts (slot-keys opts :secrets)))))
+  (let [env (System/getenv)]
+    (for [variable (library/credential-requirements opts)
+          :let [key (keyword (str/replace (str/lower-case (subs variable 11)) "_" "-"))]
+          :when (placeholder? (or (get opts key) (get env variable)))]
+      (str "required credential is not set: " variable))))
 
 (def required-tools ["tofu" "ansible-playbook" "ssh" "curl" "rsync"])
 
 (defn- command-present? [runner command]
   (zero? (:exit (runner ["sh" "-c" "command -v \"$1\" >/dev/null 2>&1" "sh" command] {}))))
 
-(def account-url "https://api.digitalocean.com/v2/account")
-
-(defn api-error
-  "Turn one probe of the DigitalOcean account endpoint into an error, or nil.
-
-  The distinction matters more than it looks. `curl -f` exits non-zero for
-  every HTTP status at or above 400, so a single message covering all of them
-  reports a DigitalOcean outage as a bad credential — and sends the operator
-  off to rotate a token that was never the problem. Only 401 and 403 say
-  anything about the token. A 5xx is DigitalOcean's own gateway, and the fix
-  is to wait and retry, not to touch desired state or credentials.
-
-  A request that never reached the API is the third case: DNS, TLS, a proxy,
-  or no route. curl reports that as the literal `000` from `%{http_code}`, so
-  a zero status is not an HTTP status at all. That is the operator's network,
-  and naming it as such saves the same wasted rotation."
-  [{:keys [exit out]}]
-  (let [status (some-> out str str/trim (as-> s (re-find #"\d{3}\z" s)) parse-long)]
-    (cond
-      (or (nil? status) (zero? status))
-      (str "could not reach the DigitalOcean API at " account-url
-           " (curl exit " exit "): this is a local network, DNS, or TLS "
-           "failure, not a credential problem. Check connectivity and retry.")
-
-      (<= 200 status 299) nil
-
-      (#{401 403} status)
-      (str "DigitalOcean rejected COLORS_PAR_DO_TOKEN (HTTP " status
-           "): the token is missing, expired, revoked, or lacks read access "
-           "to the account. Issue a new personal access token and update "
-           ".envrc.private.")
-
-      (= 429 status)
-      (str "DigitalOcean rate-limited the credential check (HTTP 429). The "
-           "token is valid; wait for the limit to reset and retry.")
-
-      (<= 500 status 599)
-      (str "the DigitalOcean API returned HTTP " status " for " account-url
-           ". That is a failure on DigitalOcean's side, not your credential — "
-           "do not rotate COLORS_PAR_DO_TOKEN. Check "
-           "https://status.digitalocean.com and retry.")
-
-      :else
-      (str "unexpected HTTP " status " from " account-url
-           " during the credential check."))))
-
 (defn runtime-errors
-  "Check local tools and authenticate the configured DigitalOcean token.
-
-  The runner arity keeps command decisions testable without network access."
   ([opts] (runtime-errors opts process/run))
-  ([opts runner]
-   (let [present (into {} (map (fn [tool] [tool (command-present? runner tool)]))
-                       required-tools)
-         tool-errors (for [tool required-tools :when (not (get present tool))]
-                       (str "required tool is not on PATH: " tool))
-         token (:do-token opts)
-         ;; No `-f`: the status code is the diagnosis, so it has to survive
-         ;; into stdout instead of collapsing into curl's exit code. Timeouts
-         ;; bound a hung gateway — a 504 took fifteen seconds to arrive.
-         api-result (when (and (not (placeholder? token)) (get present "curl"))
-                      (runner ["curl" "-sS" "-o" "/dev/null"
-                               "-w" "%{http_code}"
-                               "--connect-timeout" "10" "--max-time" "20"
-                               "-H" (str "Authorization: Bearer " token)
-                               account-url] {}))]
-     (vec (concat tool-errors
-                  (when-let [err (some-> api-result api-error)] [err]))))))
+  ([_ runner]
+   (vec (for [tool required-tools :when (not (command-present? runner tool))]
+          (str "required tool is not on PATH: " tool)))))

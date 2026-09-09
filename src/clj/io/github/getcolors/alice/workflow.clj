@@ -3,25 +3,26 @@
   (:require [green.dry-run :as dry-run]
             [green.lifecycle :as lifecycle]
             [green.progress :as progress]
-            [green.tofu :as tofu]
             [green.workflow :as wf]
             [io.github.getcolors.alice.describe :as describe]
             [io.github.getcolors.alice.ssh :as ssh]
             [io.github.getcolors.alice.ssh-config :as ssh-config]
             [io.github.getcolors.alice.sync :as sync]
             [io.github.getcolors.alice.tools :as tools]
-            [io.github.getcolors.alice.validate :as validate]))
+            [io.github.getcolors.alice.validate :as validate]
+            [io.github.getcolors.alice.compute :as compute]
+            [io.github.getcolors.compute-planning :as planning]))
 
 (def defaults
   {:compute-prevent-destroy true
    :provider-compute "digitalocean"
    :provider-dns false
-   :provider-backend "local"
+   :provider-backend "r2"
    :workdir ".colors"
    :transmission-rpc-port 9091
    :transmission-tunnel-local-port 19091})
 
-(def credential-events #{:create :delete :sync :validate})
+(def credential-events #{:validate})
 
 (def create-like-events
   "Events that bring a Droplet into existence, and therefore own the key's
@@ -46,37 +47,20 @@
           :validators
           [(fn [_ env _] (validate/env-errors env))
            (fn [opts _ _] (validate/state-errors opts))
+           (fn [opts _ {:keys [event]}]
+             (when (= :validate event)
+               (try (planning/validate-deployment opts (compute/topology opts) (compute/requirements opts)) []
+                    (catch Exception e [(ex-message e)]))))
            (fn [opts _ {:keys [event real?]}]
              (when (and real? (credential-events event))
                (validate/secret-errors opts)))
            (fn [opts _ {:keys [event real?]}]
-             (when (and real? (credential-events event))
+             (when (and real? (#{:create :delete :sync :validate} event))
                (runtime-errors-fn opts)))]
           :after-validate
-          ;; The machine key's create matrix, the DigitalOcean preflight, and
-          ;; the `~/.ssh/config` ownership checks all run before any template
-          ;; is rendered: an unowned key on disk, at the provider, or a `Host`
-          ;; stanza someone else wrote stops the run while stopping is free.
-          ;; Delete fills the same template values — a destroy renders before
-          ;; it destroys — but checks nothing, because its key cleanup runs
-          ;; after the compute destroy.
           (fn [opts _ {:keys [event real?]}]
-            (cond
-              (and real? (= :delete event))
-              (merge (ssh/with-machine-key opts)
-                     (or (tools/state-output opts) {})
-                     {:green/exit 0})
-
-              (and real? (create-like-events event))
-              (let [opts (ssh/ensure-key! opts tools/state-output)]
-                (if (wf/failed? opts)
-                  opts
-                  (let [opts (ssh/preflight! (ssh/with-machine-key opts))
-                        opts (if (wf/failed? opts) opts (ssh-config/preflight! opts))]
-                    (if (wf/failed? opts) opts (assoc opts :green/exit 0)))))
-
-              :else
-              (assoc (ssh/with-machine-key opts) :green/exit 0)))}
+            (if (and real? (create-like-events event)) (ssh-config/preflight! opts)
+                (assoc (if real? opts (ssh/with-machine-key opts)) :green/exit 0)))}
     env)))
 
 (defn as-event
@@ -95,7 +79,6 @@
 
 (def sync-local-delete-step (as-event :delete tools/ansible-local-step))
 (def sync-infrastructure-delete-step (as-event :delete tools/infrastructure-step))
-(def sync-ssh-cleanup-step (as-event :delete ssh/cleanup-step))
 (def sync-generated-cleanup-step (as-event :delete tools/generated-cleanup-step))
 
 (defn wire-fn [step run-opts]
@@ -107,10 +90,10 @@
       ;; predeceases its host locks the operator out of a machine that still
       ;; exists. Both orders are deliberate — standards/ssh-config.md §4 is
       ;; explicit that they must not be tidied into agreement.
-      :alice/start [start-step :alice/ansible-local]
+      :alice/start [start-step :alice/load-infrastructure]
+      :alice/load-infrastructure [tools/load-infrastructure-step :alice/ansible-local]
       :alice/ansible-local [tools/ansible-local-step :alice/infrastructure]
-      :alice/infrastructure [tools/infrastructure-step :alice/ssh-cleanup]
-      :alice/ssh-cleanup [ssh/cleanup-step :alice/generated-cleanup]
+      :alice/infrastructure [tools/infrastructure-step :alice/generated-cleanup]
       :alice/generated-cleanup [tools/generated-cleanup-step])
 
     ;; Alice's `sync` is the whole lifecycle in one event, so it carries both
@@ -126,8 +109,7 @@
       :alice/ansible-remote [tools/ansible-remote-step :alice/sync]
       :alice/sync [sync/sync-step :alice/sync-ansible-local-delete]
       :alice/sync-ansible-local-delete [sync-local-delete-step :alice/sync-infrastructure-delete]
-      :alice/sync-infrastructure-delete [sync-infrastructure-delete-step :alice/sync-ssh-cleanup]
-      :alice/sync-ssh-cleanup [sync-ssh-cleanup-step :alice/sync-generated-cleanup]
+      :alice/sync-infrastructure-delete [sync-infrastructure-delete-step :alice/sync-generated-cleanup]
       :alice/sync-generated-cleanup [sync-generated-cleanup-step])
 
     :validate
@@ -136,7 +118,8 @@
 
     :describe
     (case step
-      :alice/start [start-step :alice/describe]
+      :alice/start [start-step :alice/load-infrastructure]
+      :alice/load-infrastructure [tools/load-infrastructure-step :alice/describe]
       :alice/describe [describe/describe-step])
 
     (case step
@@ -146,21 +129,15 @@
       :alice/ansible-remote [tools/ansible-remote-step :alice/acceptance]
       :alice/acceptance [tools/acceptance-step])))
 
-(defn backend-advice []
-  (tofu/conventional-backend-advice
-   {:dir-fn #(tools/tool-dir % tools/infrastructure-tool)
-    :key-fn #(str (:profile %) "/" tools/infrastructure-tool ".tfstate")}))
-
 (def side-effecting-steps
-  [:alice/infrastructure :alice/ansible-local :alice/ansible-remote
+  [:alice/load-infrastructure :alice/infrastructure :alice/ansible-local :alice/ansible-remote
    :alice/acceptance :alice/sync :alice/sync-ansible-local-delete
-   :alice/sync-infrastructure-delete :alice/sync-ssh-cleanup
-   :alice/sync-generated-cleanup :alice/ssh-cleanup
+   :alice/sync-infrastructure-delete
+   :alice/sync-generated-cleanup
    :alice/generated-cleanup])
 
 (def workflow
-  (-> (wf/workflow {:start :alice/start :wire-fn wire-fn})
-      (wf/advice-add :alice/infrastructure :before ::backend
-                     (backend-advice))
+  (-> (wf/workflow {:start :alice/start :wire-fn wire-fn
+                    :next-fn (fn [_ successors opts] (if (or (wf/failed? opts) (:alice/already-destroyed opts)) [] (mapv #(vector % opts) successors)))})
       progress/advise
       (dry-run/advise side-effecting-steps)))

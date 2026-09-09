@@ -11,4 +11,4 @@
   (or (not-empty (str (:profile opts))) "alice"))
 
 (defn ssh-config-path []
-  (str (java.io.File. (System/getProperty "user.home") ".ssh/config")))
+  (str (java.io.File. (or (not-empty (System/getenv "HOME")) (System/getProperty "user.home")) ".ssh/config")))

@@ -1,14 +1,18 @@
 (ns io.github.getcolors.alice.tools
   "DigitalOcean, local SSH, Transmission, and tunnel acceptance stages."
   (:require [cheshire.core :as json]
-            [clojure.walk :as walk]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
             [green.ansible :as ansible]
             [green.process :as process]
-            [green.providers :as provider-ops]
             [green.scaffold :as sc]
-            [green.tofu :as tofu]
             [green.workflow :as wf]
             [io.github.getcolors.alice.ssh-config :as ssh-config]
+            [io.github.getcolors.alice.compute :as compute]
+            [io.github.getcolors.compute :as library]
+            [io.github.getcolors.compute-planning :as planning]
+            [io.github.getcolors.compute-orchestration :as orchestration]
+            [io.github.getcolors.compute-inspection :as inspection]
             [io.github.getcolors.alice.utils :as utils]
             [io.github.getcolors.alice.validate :as validate]))
 
@@ -26,90 +30,69 @@
 (defn raw-spec [target content] (sc/content-spec target content))
 (defn tool-dir [opts tool] (utils/tool-dir opts tool))
 
-(defn credential-env [opts & slots]
-  (provider-ops/tool-env validate/providers opts
-                         (conj (vec slots) :provider-backend)))
-
-(defn infrastructure-specs [opts]
-  (let [dir (tool-dir opts infrastructure-tool)
-        ;; The desired-state guard is never environment-controlled. An explicit
-        ;; delete event is the sole capability that renders a destroyable plan.
-        data (assoc opts
-                    :compute-prevent-destroy (not= :delete (:green/event opts))
-                    :ssh-keygen (validate/keygen? opts)
-                    :vpc-discovery (validate/vpc-discovery? opts)
-                    :compute-name (validate/compute-name opts))]
-    [(spec (template "infrastructure" "main.tf")
-           (str dir "/main.tf") data)]))
-
-(def fallback-params
-  {:ip "192.0.2.10" :user "root" :sudoer "root" :name "alice"})
-
-(defn state-output
-  "The compute stage's applied `params`, or nil when no state is readable. The
-  SSH Keypair Standard's create matrix keys on this best-effort read: an
-  unreadable state (a fresh clone, a missing backend) counts as absent."
-  [opts]
-  (try (some-> (tofu/outputs (tool-dir opts infrastructure-tool)
-                             (credential-env opts))
-               :params walk/keywordize-keys)
-       (catch Exception _ nil)))
-
-(defn- output-params [result]
-  (some-> (get-in result [:tofu/outputs :params]) walk/keywordize-keys))
+(defn- compute-json [value indent]
+  (let [padding #(apply str (repeat % " "))]
+    (cond
+      (map? value) (if (empty? value) "{}"
+                      (str "{\n" (str/join ",\n" (for [[key item] (sort-by key value)]
+                                                       (str (padding (+ indent 2)) (json/generate-string key) ": " (compute-json item (+ indent 2)))))
+                           "\n" (padding indent) "}"))
+      (sequential? value) (if (empty? value) "[]"
+                              (str "[\n" (str/join ",\n" (map #(str (padding (+ indent 2)) (compute-json % (+ indent 2))) value)) "\n" (padding indent) "]"))
+      :else (json/generate-string value))))
 
 (defn infrastructure-step [opts]
-  (let [dir (tool-dir opts infrastructure-tool)
-        result (tofu/tofu-with-spec
-                opts (infrastructure-specs opts)
-                {:dir dir :env (credential-env opts :provider-compute)})]
-    (cond
-      (wf/failed? result) result
-      (= :build (:green/event opts))
-      (merge result fallback-params {:name (utils/host-alias opts)})
-      (= :delete (:green/event opts)) result
-      :else (merge result fallback-params
-                   {:name (utils/host-alias opts)}
-                   (output-params result)))))
+  (try
+    (let [planning? (or (= :build (:green/event opts)) (:green/dry-run opts))
+          result (if planning?
+                   (planning/plan-deployment opts (compute/topology opts) (compute/requirements opts))
+                   (orchestration/orchestrate (assoc opts :green/event (if (= :sync (:green/event opts)) :create (:green/event opts)) :compute-prevent-destroy (not= :delete (:green/event opts))) (compute/topology opts) (compute/requirements opts)))]
+      (when planning?
+        (doseq [[stage key] (cons ["shared" (get-in result [:state_keys :shared])]
+                                 (map (fn [[id key]] [(str "nodes/" (name id)) key]) (get-in result [:state_keys :nodes]))) ]
+          (let [target (io/file (tool-dir opts infrastructure-tool) stage "backend.tf.json")]
+            (io/make-parents target)
+            (spit target (str (compute-json (:config (library/backend-plan opts key)) 0) "\n"))))
+        (doseq [[stage documents] (cons ["shared" (get-in result [:documents :shared])]
+                                      (map (fn [[id documents]] [(str "nodes/" id) documents]) (get-in result [:documents :nodes])))
+                [filename document] documents]
+          (let [target (io/file (tool-dir opts infrastructure-tool) stage filename)]
+            (io/make-parents target)
+            (spit target (str (compute-json document 0) "\n")))))
+      (if-not (contains? #{"ready" "planned" "destroyed"} (:status result))
+        (assoc opts :green/exit 1 :green/err (if (seq (:errors result)) (str/join "\n" (:errors result)) "compute lifecycle refused; inspect state ownership and configuration"))
+        (cond-> (assoc opts :green/exit 0)
+          (:shared result) (assoc :colors-compute/shared (:shared result))
+          (:cluster result) (assoc :colors-compute/cluster (:cluster result) :ip (get-in result [:cluster :nodes 0 :ip]) :user (get-in result [:cluster :nodes 0 :user]))
+          (get-in result [:key :private_key_path])
+          (assoc :ssh-private-key-path (if planning? (str/replace (get-in result [:key :private_key_path]) "$HOME/.ssh" "/home/build-placeholder/.ssh") (get-in result [:key :private_key_path]))))))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute lifecycle refused; legacy monolithic state requires explicit migration"))))
+
+(defn load-infrastructure-step [opts]
+  (try
+    (let [result (inspection/read-deployment opts nil nil (compute/requirements opts))]
+      (case (:status result)
+        "present" (let [node (first (get-in result [:cluster :nodes]))]
+                    (cond-> (assoc opts :colors-compute/cluster (:cluster result)
+                                       :colors-compute/shared (:shared result)
+                                       :ip (:ip node) :user (:user node) :green/exit 0)
+                      (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node))))
+        "destroyed" (if (= :delete (:green/event opts)) (assoc opts :alice/already-destroyed true :green/exit 0)
+                        (assoc opts :green/exit 1 :green/err "compute deployment is destroyed"))
+        (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required")))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required"))))
 
 (defn data-fn [opts]
-  (merge fallback-params opts
-         {:host-alias (utils/host-alias opts)
-          :ip (or (:ip opts) (:ip fallback-params))
-          :user (or (:user opts) "root")}))
+  (let [node (compute/node opts)]
+    (merge opts {:host-alias (utils/host-alias opts) :ip (:ip node) :user (:user node)})))
 
-(defn inventory
-  "The remote inventory: one root host, and in keygen mode the path to the
-  machine key.
-
-  `ansible.cfg` runs the connection with `-F /dev/null` on purpose — the run
-  must not depend on `~/.ssh/config`, a file shared with every other host the
-  operator reaches and rewritten by the local stage while the run is in
-  flight. That isolation also discards the `IdentityFile` the managed block
-  names, so in keygen mode nothing offers the generated key unless an agent
-  happens to hold it, and a create that worked yesterday fails today with
-  `Permission denied (publickey)`. Naming the path here is what ONCE does for
-  the same reason (`once.tools/inventory`): a path, never key material.
-
-  The key alone is not enough: without `IdentitiesOnly` the agent's keys are
-  offered ahead of it, and stale copies of superseded machine keys — added by
-  a workstation's `AddKeysToAgent` and outliving the deleted file — exhaust
-  the server's `MaxAuthTries` as `Too many authentication failures` before
-  the named key is reached. The generated key is passphrase-less and
-  ephemeral, so the agent contributes nothing here; `IdentityAgent none`
-  both ignores it and keeps this connection from feeding it another copy.
-  Opt-out mode stays silent: the operator supplied the key, and how their
-  ssh finds it — agent included — is their arrangement to keep."
-  [opts]
+(defn inventory [opts]
   (let [{:keys [host-alias ip user ssh-private-key-path]} (data-fn opts)]
     (json/generate-string
-     {:all {:hosts {host-alias (cond-> {:ansible_host ip :ansible_user user}
-                                 (validate/keygen? opts)
-                                 (assoc :ansible_ssh_private_key_file
-                                        ssh-private-key-path
-                                        :ansible_ssh_common_args
-                                        "-o IdentitiesOnly=yes -o IdentityAgent=none"))}}}
-     {:pretty true})))
+      {:all {:hosts {host-alias (cond-> {:ansible_host ip :ansible_user user}
+                                 ssh-private-key-path (assoc :ansible_ssh_private_key_file ssh-private-key-path)
+                                 (validate/keygen? opts) (assoc :ansible_ssh_common_args "-o IdentitiesOnly=yes -o IdentityAgent=none"))}}}
+      {:pretty true})))
 
 (defn ansible-local-specs [opts]
   (let [dir (tool-dir opts ansible-local-tool)
@@ -132,8 +115,8 @@
      {:dir dir :inventory "inventory.ini"
       :playbooks {:create "main.yml" :delete "main.yml"}
       :extra-vars {:host_alias (:host-alias data)
-                   :ip (:ip data)
-                   :user (:user data)
+                   :ssh_hosts [{:name (:host-alias data) :ip (:ip data) :user (:user data)}]
+                   :ssh_legacy_marker_prefix "alice"
                    :block_state (if delete? "absent" "present")}}
      (ansible-local-specs opts))))
 

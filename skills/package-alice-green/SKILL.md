@@ -39,3 +39,9 @@ this tunnel check before returning. `sync` creates its own tunnel, prints that
 URL, adds desired magnets, incrementally rsyncs completed downloads directly
 into the configured local directory, verifies a final checksummed copy, and
 then destroys the Droplet. Failures retain it for a retry.
+
+Compute provisioning uses the pinned colors-compute library, including SSH key
+ownership, default or explicit VPC selection, and remote S3/R2 state. Alice
+passes a singleton topology and application firewall policy. Existing monolithic
+`<profile>/alice-infrastructure.tfstate` deployments require explicit migration.
+The SSH config play remains package-owned and serializes atomic updates.

@@ -10,7 +10,7 @@ together.
 |---|---|
 | DigitalOcean API | `COLORS_PAR_DO_TOKEN` |
 | R2 backend | `COLORS_PAR_R2_ACCESS_KEY_ID`, `COLORS_PAR_R2_SECRET_ACCESS_KEY` |
-| S3 backend | `COLORS_PAR_S3_ACCESS_KEY_ID`, `COLORS_PAR_S3_SECRET_ACCESS_KEY` |
+| S3 backend | Ambient AWS credential chain |
 
 Never export `COLORS_PAR_PROFILE`.
 
@@ -24,7 +24,7 @@ Both name the file and line and leave the decision to a human.
 ## Desired state
 
 Required keys select the unique profile/work directory, DigitalOcean compute,
-and local/S3/R2 state backend. DigitalOcean needs a region, size, and image —
+and S3/R2 state backend. DigitalOcean needs a region, size, and image —
 not a Droplet name, which defaults to the profile.
 
 Alice also accepts:
@@ -42,7 +42,8 @@ Alice also accepts:
   default VPC is discovered at runtime through a `digitalocean_vpc` data
   source, with the apply asserting that the discovered VPC really is the
   account default. Supply one only to target a VPC that is not the regional
-  default; a supplied value is still checked for UUID shape;
+  default; a supplied value is checked for UUID shape and the library reads its
+  observed CIDR and verifies its region without owning the VPC;
 - `digitalocean-ssh-keys` — an existing SSH key ID or fingerprint. Omit it and
   the package owns the machine keypair instead: it generates
   `~/.ssh/<profile>`(`.pub`), registers a DigitalOcean key named after the
@@ -65,18 +66,17 @@ cleanup.
 
 ## Lifecycle
 
-Create discovers the regional default VPC unless one is pinned, generates the
-machine keypair before any provider call, refuses if a key
-exists that state does not account for or if DigitalOcean already holds a key
-named after the profile that this deployment does not own, provisions the
-Droplet, writes `Host <profile>` into `~/.ssh/config`, installs Transmission, forces RPC onto loopback, and verifies the web UI through
+The pinned colors-compute library verifies state ownership, checks provider
+registration and records key intent before generation. It resolves the default
+or explicit VPC, provisions one node, writes `Host <profile>` into `~/.ssh/config`, installs Transmission, forces RPC onto loopback, and verifies the web UI through
 a real SSH tunnel. RPC password authentication is disabled because loopback plus
 SSH is the sole access boundary. Ubuntu 24.04's packaged AppArmor 4 profile
 cannot notify systemd even in complain mode, so the playbook disables that
 profile before starting the service. Delete removes the managed SSH block before
 destroying the Droplet, and the local keypair only after the destroy has
-succeeded — a failed delete leaves the key, because it is still the only way in. With a local backend, retain `.colors/` until deletion
-completes; otherwise the state needed to address the Droplet is lost.
+succeeded. A failed delete retains the key. Compute state and its ownership
+journal are remote under `<profile>/compute/`; generated build files contain
+only non-secret backend settings.
 
 `sync` creates or resumes the deployment, opens and prints the private UI
 tunnel, adds missing desired magnets, and rsyncs whenever another desired
@@ -98,5 +98,9 @@ but never credentials. Do not edit or commit it.
 A repeated `create` converges the same state. If Transmission is inactive, SSH
 to the profile and inspect `systemctl status transmission-daemon` and
 `journalctl -u transmission-daemon`. If the local alias is stale, rerun create;
-do not edit `.colors/`. If local state is lost, recover or import the Droplet
-into `digitalocean_droplet.alice` before attempting deletion.
+do not edit `.colors/`. Unreadable or foreign state stops the lifecycle.
+Legacy `<profile>/alice-infrastructure.tfstate` must be migrated explicitly
+before running this version against an existing deployment.
+
+The provider firewall allows SSH22 and Transmission peer TCP/UDP51413, with
+outbound traffic allowed. RPC9091 remains loopback-only.

@@ -31,7 +31,7 @@ mkdir "$tmp/project"
 cp "$launcher" "$tmp/project/green"; chmod +x "$tmp/project/green"
 cp "$root/test/fixtures/colors.yml" "$tmp/project/colors.yml"
 (cd "$tmp/project" && ALICE_LIB_ROOT="$root" ./green build >/dev/null) || fail 'ALICE_LIB_ROOT build failed'
-[ -f "$tmp/project/.colors/alice-fixture/alice-infrastructure/main.tf" ] || fail 'copied payload rendered nothing'
+[ -f "$tmp/project/.colors/alice-fixture/alice-infrastructure/nodes/0/node.tf.json" ] || fail 'copied payload rendered nothing'
 ok 'working-tree override renders from a copied payload'
 mkdir -p "$tmp/project/deep/path"
 (cd "$tmp/project/deep/path" && ALICE_LIB_ROOT="$root" ../../green build >/dev/null) || fail 'upward desired-state search failed'

@@ -29,7 +29,7 @@ Never run real create/delete without explicit authorization. Never edit or read
 `digitalocean-ssh-keys` and `digitalocean-vpc-uuid` are both optional, and in
 both cases **presence is the only switch** — there is no mode flag. Omit them
 and the package supplies the answer itself; supply them and it uses what it was
-given, verbatim, creating and discovering nothing.
+given. The compute library validates an explicit VPC UUID through a data lookup; it never owns that VPC.
 
 `digitalocean-vpc-uuid` absent means the region's default VPC is read through a
 `digitalocean_vpc` data source, and the Droplet's `lifecycle` asserts
@@ -56,8 +56,7 @@ validated, or deleted, no account key resource is created, and the block carries
 no `IdentityFile`, because the operator has their own arrangements for finding
 their key and guessing is worse than silence.
 
-Key behaviour is ONCE's (`io.github.getcolors.once.ssh`), reused rather than
-reimplemented so one standard has one implementation; the `~/.ssh/config` play
+Key lifecycle belongs to the pinned colors-compute library; the `~/.ssh/config` play
 is deliberately alice's own copy, because that file is shared with every other
 host the operator reaches and an unrelated upstream change must not rewrite it
 at pin-bump time. There is no rotation verb: Droplet key sets are ForceNew, so
@@ -67,8 +66,7 @@ The managed block is not what the remote stage connects with. `ansible.cfg`
 passes `-F /dev/null`, so the run cannot depend on a shared file the local
 stage is rewriting in the same create, and that also discards the block's
 `IdentityFile`. In keygen mode the rendered `inventory.json` therefore names
-`ansible_ssh_private_key_file` itself — a path, never key material, exactly as
-ONCE does. Remove it and a create succeeds only on a workstation whose agent
+`ansible_ssh_private_key_file` itself — a path, never key material, through the normalized library result. Remove it and a create succeeds only on a workstation whose agent
 already holds the generated key, and fails `Permission denied (publickey)`
 everywhere else. The keygen inventory also carries
 `ansible_ssh_common_args: -o IdentitiesOnly=yes -o IdentityAgent=none`: the
@@ -80,13 +78,11 @@ first and exhaust `MaxAuthTries` as `Too many authentication failures`.
 agent out of every path the package owns; opt-out mode says nothing, because
 the operator's own key arrangements may include the agent.
 
-An existing `~/.ssh/<profile>` with no readable compute state is an error, never
-an overwrite — it may be the only credential to a Droplet that is still alive.
-Because `sync` destroys the Droplet on success, a run interrupted between the
-destroy and the key removal leaves that state behind and the next `sync` will
-refuse until the key is removed by hand. That is the standard working, not a
-bug: verify at DigitalOcean that no Droplet for the profile survives, then
-remove `~/.ssh/<profile>` and `~/.ssh/<profile>.pub`.
+The compute library journals key intent before generation and refuses to adopt
+unowned key files or provider registrations. An unreadable backend never means
+absence. Managed key cleanup happens only after confirmed node, shared resource
+and registration destruction. Interrupted cleanup can be retried through the
+owned lifecycle; do not delete keys based on a failed state read.
 
 `sync` is the one place alice departs from the letter of the keypair standard,
 which bars a `sync` from touching key material. That clause is written for
@@ -94,8 +90,7 @@ packages where `sync` is auxiliary and leaves the machine alone; alice's `sync`
 *is* the lifecycle. The DAG resolves it rather than deviating: the teardown
 steps run relabelled as `:delete` through `workflow/as-event`, so what executes
 is still a create and still a delete, and `sync` has no key lifecycle of its
-own. Do not "simplify" that relabelling away — `cleanup-step` gates on
-`:green/event`, and it would silently start leaving keys behind.
+own. Do not "simplify" that relabelling away — the library dispatches lifecycle operations by `:green/event`.
 
 The marker is mid-migration. Alice used to write `# BEGIN alice <alias> ...`;
 the standard's marker carries the alias alone. `ansible-local/main.yml` removes
@@ -107,13 +102,12 @@ markers together, one pin cycle from now, or not at all.
 ## Architecture and safety
 
 Create is `start -> infrastructure -> ansible-local -> ansible-remote ->
-acceptance`. Delete is `start -> ansible-local -> infrastructure -> ssh-cleanup
+acceptance`. Delete is `start -> load-infrastructure -> ansible-local -> infrastructure
 -> generated-cleanup`: the managed `~/.ssh/config` block goes before the destroy
 and the keypair strictly after it. Those two orders disagree deliberately — a
 stale block is harmless, a key removed ahead of its Droplet locks you out of a
 machine that still exists — and `standards/ssh-config.md` §4 forbids tidying
-them into agreement. Build and dry-run are credential-free. Validate reports desired-state,
-tool, credential-presence, and DigitalOcean authentication failures together.
+them into agreement. Build and dry-run are credential-free. Validate reports desired-state, local tool and library credential-presence errors. Provider account checks belong to the library lifecycle.
 
 Credentials use only `COLORS_PAR_*` and never render. `COLORS_PAR_PROFILE` is
 always refused. Keep `compute-prevent-destroy: true` in desired state;
@@ -123,7 +117,7 @@ torrent is complete and the final checksummed rsync succeeds.
 
 The Droplet is named after the profile (`standards/compute-name.md`).
 `digitalocean-name` is an optional override, resolved once by
-`validate/compute-name` so the template renders one value and never branches —
+the library deployment request so each node renders one name —
 the same "presence is the only switch" shape as the VPC and the keypair. There
 is no `package` key in desired state: it could hold exactly one value.
 
@@ -133,16 +127,18 @@ It does mean `sync` satisfies its desired set on the first `torrent-get` and
 tears the Droplet down after one copy; `create` plus `tunnel` is the verb pair
 for a UI meant to stay open.
 
-The package owns its DigitalOcean template and depends on Green and on ONCE for
-the keypair implementation alone. The UI is
+The package requests one existing-network node through colors-compute. Provider
+recipes, credentials, default/explicit VPC selection, SSH keys and remote S3/R2
+state belong to that dependency; there is no package compute registry or
+template. New provider capabilities arrive with a library version bump. The UI is
 not a public service: Transmission RPC binds 127.0.0.1, RPC password auth is
 disabled because SSH is the only access boundary, and acceptance opens a
 short-lived SSH local forward before curling the web UI. `sync` keeps its own
 forward open, prints the UI URL, adds desired magnets, incrementally rsyncs
 completed downloads directly into the configured local directory, stops the
 daemon for a final checksummed rsync, and only then deletes the deployment.
-Failures retain the Droplet and state. Stage names are package-specific
-remote-state keys.
+Failures retain the Droplet and state. Remote compute objects live under `<profile>/compute/`. Legacy monolithic
+`<profile>/alice-infrastructure.tfstate` requires explicit migration.
 
 Ubuntu 24.04's AppArmor 4 Transmission profile returns EACCES for systemd's
 disconnected notify socket even in complain mode, causing every service start to

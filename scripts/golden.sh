@@ -31,71 +31,24 @@ build() {
 # supplies an explicit key id and must render the historical shape, creating no
 # account key resource. The SSH Keypair Standard has two modes and a package
 # conforms only if both hold.
-build local "$state" COLORS_PAR_PROVIDER_BACKEND=local
+build s3 "$state" COLORS_PAR_PROVIDER_BACKEND=s3 COLORS_PAR_S3_BUCKET=alice-state COLORS_PAR_S3_REGION=eu-west-1
 build r2 "$state"
-build optout "$optout" COLORS_PAR_PROVIDER_BACKEND=local
+build optout "$optout" COLORS_PAR_PROVIDER_BACKEND=s3 COLORS_PAR_S3_BUCKET=alice-state COLORS_PAR_S3_REGION=eu-west-1
 
-base="$tmp/local/alice-fixture"
+base="$tmp/s3/alice-fixture"
 for stage in alice-infrastructure alice-ansible-local alice-ansible-remote alice-acceptance; do
   [ -d "$base/$stage" ] || { echo "golden: missing stage $stage" >&2; exit 1; }
 done
 
-infra="$base/alice-infrastructure/main.tf"
-grep -q 'resource "digitalocean_droplet" "alice"' "$infra"
-grep -q 'prevent_destroy = true' "$infra"
-
-# Discovery mode reads the region's default VPC rather than pinning a UUID, and
-# asserts the answer really is the account default.
-grep -q 'data "digitalocean_vpc" "default"' "$infra"
-grep -q 'vpc_uuid = data.digitalocean_vpc.default.id' "$infra"
-grep -q 'condition     = data.digitalocean_vpc.default.default' "$infra"
-if grep -Eq '^[[:space:]]+vpc_uuid = "' "$infra"; then
-  echo 'golden: discovery mode pinned a literal VPC UUID' >&2
-  exit 1
-fi
-
-# Keygen mode owns a profile-named account key resource, references it by
-# attribute rather than a literal id, and surfaces its id in state so the
-# create preflight can decide ownership (SSH Keypair Standard §4.3, §5).
-grep -q 'resource "digitalocean_ssh_key" "machine"' "$infra"
-grep -q 'name       = "alice-fixture"' "$infra"
-grep -q 'ssh_keys = \[digitalocean_ssh_key.machine.id\]' "$infra"
-grep -q 'ssh_key_id = digitalocean_ssh_key.machine.id' "$infra"
-
-# Opt-out mode creates nothing and keeps the literal id it was given.
-optout_infra="$tmp/optout/alice-optout-fixture/alice-infrastructure/main.tf"
-if grep -q 'digitalocean_ssh_key' "$optout_infra"; then
-  echo 'golden: opt-out mode rendered an account key resource' >&2
-  exit 1
-fi
-grep -q 'ssh_keys = \["812184"\]' "$optout_infra"
-
-# A pinned VPC creates no data source and no postcondition.
-grep -q 'vpc_uuid = "00000000-0000-4000-8000-000000000000"' "$optout_infra"
-if grep -q 'digitalocean_vpc' "$optout_infra"; then
-  echo 'golden: a pinned VPC still rendered the discovery data source' >&2
-  exit 1
-fi
-if grep -q 'postcondition' "$optout_infra"; then
-  echo 'golden: a pinned VPC rendered the default-VPC postcondition' >&2
-  exit 1
-fi
-
-# The block carries IdentityFile only where the package owns the key (SSH
-# Config Standard §3); in opt-out mode the operator has their own arrangements
-# and guessing is worse than silence.
+python3 "$root/scripts/compute-contract.py" "$base/alice-infrastructure" managed s3
+python3 "$root/scripts/compute-contract.py" "$tmp/r2/alice-fixture/alice-infrastructure" managed r2
+python3 "$root/scripts/compute-contract.py" "$tmp/optout/alice-optout-fixture/alice-infrastructure" external s3
 local_play="$base/alice-ansible-local/main.yml"
-grep -Eq '^[[:space:]]+IdentityFile ~/\.ssh/alice-fixture$' "$local_play"
-grep -q 'IdentitiesOnly yes' "$local_play"
-grep -q 'insertbefore: BOF' "$local_play"
-grep -q 'marker: "# {mark} {{ host_alias }} ANSIBLE MANAGED BLOCK"' "$local_play"
-# Anchored on the directive, indented inside the block — the play's own
-# comments mention IdentityFile while explaining the wildcard trap.
-if grep -Eq '^[[:space:]]+IdentityFile[[:space:]]' \
-  "$tmp/optout/alice-optout-fixture/alice-ansible-local/main.yml"; then
-  echo 'golden: opt-out mode rendered an IdentityFile it does not own' >&2
-  exit 1
-fi
+grep -q 'colors_keygen: true' "$local_play"
+grep -q 'IdentityAgent none' "$local_play"
+grep -q 'fcntl.flock' "$local_play"
+grep -q 'os.replace' "$local_play"
+grep -q 'colors_keygen: false' "$tmp/optout/alice-optout-fixture/alice-ansible-local/main.yml"
 
 # A build that reached the real ~/.ssh would leak the operator's home into
 # committed bytes and make the goldens workstation-specific.
@@ -113,8 +66,8 @@ for variant_base in "$tmp"/*/*; do
     exit 1
   fi
 done
-grep -q 'alice-fixture/alice-infrastructure.tfstate' \
-  "$tmp/r2/alice-fixture/alice-infrastructure/backend.tf.json"
+grep -q 'alice-fixture/compute/shared.tfstate' \
+  "$tmp/r2/alice-fixture/alice-infrastructure/shared/backend.tf.json"
 
 play="$base/alice-ansible-remote/main.yml"
 grep -q 'transmission-daemon' "$play"
