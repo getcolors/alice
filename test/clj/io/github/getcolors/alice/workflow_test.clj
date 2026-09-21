@@ -2,8 +2,7 @@
  (:require [clojure.test :refer [deftest is]] [clojure.java.io :as io]
            [green.workflow :as wf] [io.github.getcolors.alice.workflow :as workflow]
            [io.github.getcolors.alice.tools :as tools] [io.github.getcolors.alice.sync :as sync]
-           [io.github.getcolors.compute-orchestration :as compute]
-           [io.github.getcolors.compute-inspection :as inspection]
+           [io.github.getcolors.compute-node :as compute]
            [io.github.getcolors.alice.validate-test :as vt]))
 (defn- temp-dir [] (.toFile (java.nio.file.Files/createTempDirectory "alice-build-" (make-array java.nio.file.attribute.FileAttribute 0))))
 (deftest delete-and-sync-order
@@ -13,7 +12,7 @@
  (is (= [sync/sync-step :alice/sync-ansible-local-delete] (workflow/wire-fn :alice/sync {:green/event :sync})))
  (is (= :alice/sync-generated-cleanup (second (workflow/wire-fn :alice/sync-infrastructure-delete {:green/event :sync})))))
 (deftest sync-relabels-delete-and-preserves-guard
- (with-redefs [compute/orchestrate (fn [opts & _] (is (= :delete (:green/event opts))) (is (false? (:compute-prevent-destroy opts))) {:status "destroyed"})]
+ (with-redefs [compute/compute-node! (fn [opts req operation] (is (= "delete" operation)) (is (false? (:compute-prevent-destroy opts))) {:status "destroyed"})]
   (let [result (workflow/sync-infrastructure-delete-step (assoc vt/base :green/event :sync))]
    (is (= :sync (:green/event result))) (is (true? (:compute-prevent-destroy result))) (is (= 0 (:green/exit result))))))
 (deftest failed-final-sync-prevents-destruction
@@ -25,7 +24,7 @@
    (is (= 1 (:green/exit (wf/run workflow/workflow (assoc vt/base :green/event :sync)))))
    (is (empty? @calls)))))
 (deftest inspection-failure-prevents-delete
- (with-redefs [inspection/read-deployment (fn [_ env deps _] (is (map? env)) (is (contains? env "HOME")) (is (= {} deps)) {:status "error"})]
+ (with-redefs [compute/compute-node! (fn [_ req operation] (is (= "0" (:node_id req))) (is (= "inspect" operation)) {:status "error"})]
   (is (= 1 (:green/exit (tools/load-infrastructure-step (assoc vt/base :green/event :delete)))))))
 (deftest whole-build-default-and-referenced-vpc
  (doseq [base [vt/base vt/discovery-base vt/keygen-base]]
@@ -33,7 +32,7 @@
    (try
     (let [result (wf/run workflow/workflow (assoc base :green/event :build :workdir (str dir)))]
      (is (= 0 (:green/exit result)) (:green/err result))
-     (doseq [file ["alice-infrastructure/nodes/0/node.tf.json" "alice-infrastructure/shared/backend.tf.json" "alice-ansible-local/main.yml" "alice-ansible-remote/main.yml" "alice-acceptance/acceptance.sh"]]
+     (doseq [file ["0/compute.tf.json" "0/backend.tf.json" "alice-ansible-local/main.yml" "alice-ansible-remote/main.yml" "alice-acceptance/acceptance.sh"]]
       (is (.isFile (io/file dir (:profile base) file)) file)))
     (finally (doseq [file (reverse (file-seq dir))] (.delete file)))))))
 (deftest dry-run-touches-nothing
@@ -44,11 +43,7 @@
    (finally (.delete dir)))))
 
 (deftest explicit-empty-ssh-sources-never-widen-access
-  (is (thrown? Exception
-        (io.github.getcolors.compute-planning/plan-deployment
-          (assoc vt/base :alice-ssh-sources [])
-          (io.github.getcolors.alice.compute/topology vt/base)
-          (io.github.getcolors.alice.compute/requirements (assoc vt/base :alice-ssh-sources []))))))
+  (is (thrown? Exception (io.github.getcolors.alice.compute/plan (assoc vt/base :alice-ssh-sources [])))))
 
 (deftest retired-resumes-only-idempotent-local-cleanup
   (let [dir (.toFile (java.nio.file.Files/createTempDirectory "alice-retired-" (make-array java.nio.file.attribute.FileAttribute 0)))
@@ -77,3 +72,26 @@
       (is (= [] (workflow/next-steps :alice/load-infrastructure [:forbidden/remote] (assoc opts :green/exit 1 :alice/already-destroyed true))))
       (is (not (.exists (io/file dir ".ssh"))))
       (finally (doseq [f (reverse (file-seq dir))] (io/delete-file f true))))))
+
+(deftest generated-cleanup-retains-compute-root
+  (let [dir (temp-dir) opts (assoc vt/base :green/event :delete :workdir (str dir))
+        root (io/file dir (:profile opts) "0")]
+    (try
+      (.mkdirs root)
+      (doseq [name ["compute.tf.json" "backend.tf.json" ".terraform.lock.hcl"]]
+        (spit (io/file root name) "retained"))
+      (.mkdirs (io/file root ".terraform"))
+      (tools/generated-cleanup-step opts)
+      (is (every? #(.exists (io/file root %)) ["compute.tf.json" "backend.tf.json" ".terraform.lock.hcl" ".terraform"]))
+      (finally (doseq [file (reverse (file-seq dir))] (.delete file))))))
+
+(deftest repeated-delete-uses-only-confirmed-empty-inspection
+  (with-redefs [compute/compute-node! (fn [_ req operation]
+                                      (is (= "inspect" operation))
+                                      (is (= "alice-node-0.tfstate" (:state_filename req)))
+                                      {:status "destroyed" :directory "/sdk/alice-test/0"})]
+    (let [result (tools/load-infrastructure-step (assoc vt/base :green/event :delete))]
+      (is (zero? (:green/exit result)))
+      (is (true? (:alice/already-destroyed result)))
+      (is (= [[:alice/generated-cleanup result]]
+             (workflow/next-steps :alice/load-infrastructure [:alice/ansible-local] result))))))

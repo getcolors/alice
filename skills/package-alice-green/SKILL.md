@@ -40,16 +40,19 @@ URL, adds desired magnets, incrementally rsyncs completed downloads directly
 into the configured local directory, verifies a final checksummed copy, and
 then destroys the Droplet. Failures retain it for a retry.
 
-Compute provisioning uses the pinned colors-compute library, including SSH key
-ownership, default or explicit VPC selection, and remote S3/R2 state. Alice
-passes a singleton topology and application firewall policy. Existing monolithic
-`<profile>/alice-infrastructure.tfstate` deployments require explicit migration.
-The SSH config play remains package-owned and serializes atomic updates.
+Compute provisioning uses one `colors-compute` node (`0`) with its own state
+(`alice-node-0.tfstate`). Alice supplies the firewall policy and orders the
+application workflow. OpenTofu runs in `<workdir>/<profile>/0/`; templates and
+initialization files remain after deletion.
 
-### Repeated deletion after compute retirement
+SSH key authority follows the backend: local OpenTofu state owns local-backend
+keys with no S3 requirement; remote backends use managed S3-compatible key
+objects. Application key files in the SDK node directory are refreshed from
+that authority before access and never adopted or uploaded. The SSH config
+play remains package-owned and points to the refreshed copy. Existing
+monolithic/shared/node states require explicit migration; do not erase their
+ownership records as a shortcut.
 
-A repeated `delete` with validated retired compute ownership resumes only the
-local generated-file cleanup. It does not require removed SSH keys or contact
-the former hosts, DNS, registry, or other application cloud resources. Failed
-ownership inspection still stops deletion. Local cleanup preserves unrelated
-files and is safe to repeat.
+Repeated delete resumes only local generated-file cleanup when a successful
+library inspection confirms strictly empty state. Missing or unreadable state
+still stops deletion. Compute templates and initialization files are retained.

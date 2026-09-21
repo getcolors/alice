@@ -4,10 +4,7 @@
             [green.cli :as green-cli]
             [green.process :as process]
             [io.github.getcolors.alice.sync :as sync]
-            [io.github.getcolors.compute-ssh :as ssh]
             [io.github.getcolors.compute :as library]
-            [io.github.getcolors.compute-planning :as planning]
-            [io.github.getcolors.compute-deployment-request :as deployment]
             [io.github.getcolors.alice.compute :as compute]))
 
 (def profile-par (green-cli/par-name :profile))
@@ -25,8 +22,8 @@
            (or (str/blank? x) (= "REPLACE_ME" (str/upper-case x))))))
 
 (defn compute-name [opts]
-  (get-in (deployment/deployment-requests opts (compute/topology opts) (compute/requirements opts) {:mode "managed" :public_key "ssh-ed25519 PLACEHOLDER managed-by-colors"}) [:shared :name]))
-(defn keygen? [opts] (= "managed" (:mode (ssh/mode opts))))
+  (str (:profile opts) "-" compute/node-id))
+(defn keygen? [_] true)
 (defn- missing [opts ks] (keep #(when (placeholder? (get opts %)) %) ks))
 
 (defn env-errors [env]
@@ -85,7 +82,7 @@
                      (count (distinct (keep sync/magnet-info-hash
                                             (:transmission-magnet-links opts))))))
       [":transmission-magnet-links must have unique BTIH hashes"])
-    (try (library/backend-plan opts (str (:profile opts) "/compute/shared.tfstate")) [] (catch Exception e [(ex-message e)])))))
+    (try (compute/plan opts) [] (catch Exception e [(ex-message e)])))))
 
 (defn secret-errors [opts]
   (let [env (System/getenv)]
@@ -94,13 +91,13 @@
           :when (placeholder? (or (get opts key) (get env variable)))]
       (str "required credential is not set: " variable))))
 
-(def required-tools ["tofu" "ansible-playbook" "ssh" "curl" "rsync"])
+(def required-tools ["tofu" "aws" "ssh-keygen" "ansible-playbook" "ssh" "curl" "rsync"])
 
 (defn- command-present? [runner command]
   (zero? (:exit (runner ["sh" "-c" "command -v \"$1\" >/dev/null 2>&1" "sh" command] {}))))
 
 (defn runtime-errors
   ([opts] (runtime-errors opts process/run))
-  ([_ runner]
-   (vec (for [tool required-tools :when (not (command-present? runner tool))]
+  ([opts runner]
+   (vec (for [tool (if (= "local" (:provider-backend opts)) (remove #{"aws"} required-tools) required-tools) :when (not (command-present? runner tool))]
           (str "required tool is not on PATH: " tool)))))

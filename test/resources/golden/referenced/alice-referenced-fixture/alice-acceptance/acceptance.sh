@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-alias_name='alice-optout-fixture'
+alias_name='alice-referenced-fixture'
 local_port='19091'
 remote_port='9091'
 ssh_config="$HOME/.ssh/config"

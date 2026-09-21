@@ -12,14 +12,12 @@
 (defn- lines [s] (str/split-lines s))
 
 (deftest the-alias-is-the-profile
-  (is (= "alice-test" (ssh-config/host-alias vt/base)))
-  (is (= "~/.ssh/alice-test" (ssh-config/identity-file vt/base))))
+  (is (= "alice-test" (ssh-config/host-alias vt/base))))
 
-(deftest the-identity-file-keeps-its-tilde
-  ;; OpenSSH expands it, and leaving it unexpanded is what keeps the rendered
-  ;; block identical on every workstation.
-  (is (not (str/includes? (ssh-config/identity-file vt/base)
-                          (System/getProperty "user.home")))))
+(deftest the-identity-is-the-sdk-local-copy
+  (is (= "/sdk/alice-test/0/ssh-key"
+         (ssh-config/identity-file (assoc vt/base :ssh-private-key-path "/sdk/alice-test/0/ssh-key"))))
+  (is (thrown? Exception (ssh-config/identity-file vt/base))))
 
 (deftest the-marker-carries-the-alias-alone
   ;; §2: the profile is <package>-<suffix>, so it already names the package.

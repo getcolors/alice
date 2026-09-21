@@ -64,3 +64,16 @@
                     green.process/run-inherit (fn [_] {:exit 1 :err "checksum failed"})]
         (is (thrown? Exception (sync/sync-step opts))))
       (finally (.delete directory)))))
+
+(deftest encoded-magnet-query-components-are-decoded-once
+  (let [hash "4cdce46e0cda3be676d4d3ae7ba1a1e42a24f2af"]
+    (is (= hash (sync/magnet-info-hash (str "magnet:?xt=urn%3Abtih%3A" hash "&dn=Debian+netinst"))))
+    (is (= hash (sync/magnet-info-hash (str "MAGNET:?%78%74=URN%3Abtih%3A" (str/upper-case hash)))))
+    (is (= hash (sync/magnet-info-hash (str "magnet:?dn=an%26escaped%3Dname&xt=urn:btih:" hash "#label"))))
+    (is (nil? (sync/magnet-info-hash (str "magnet:?dn=escaped%26xt%3Durn%3Abtih%3A" hash))))
+    (is (nil? (sync/magnet-info-hash (str "magnet:?xt=urn%253Abtih%253A" hash))))
+    (is (nil? (sync/magnet-info-hash (str "https://example.org/?xt=urn:btih:" hash))))
+    (is (nil? (sync/magnet-info-hash "magnet:?xt=urn%ZZbtih%3Ainvalid")))
+    (is (nil? (sync/magnet-info-hash nil)))
+    (is (= hash (sync/magnet-info-hash (str "magnet:?xt=urn:btih:" hash "&xt=urn%3Abtih%3A" hash))))
+    (is (nil? (sync/magnet-info-hash (str "magnet:?xt=urn:btih:" hash "&xt=urn:btih:306d9b5251c2209a723675fbdd60a87072dba2bb"))))))

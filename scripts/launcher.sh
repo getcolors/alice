@@ -30,14 +30,14 @@ fi
 mkdir "$tmp/project"
 cp "$launcher" "$tmp/project/green"; chmod +x "$tmp/project/green"
 cp "$root/test/fixtures/colors.yml" "$tmp/project/colors.yml"
-(cd "$tmp/project" && ALICE_LIB_ROOT="$root" ./green build >/dev/null) || fail 'ALICE_LIB_ROOT build failed'
-[ -f "$tmp/project/.colors/alice-fixture/alice-infrastructure/nodes/0/node.tf.json" ] || fail 'copied payload rendered nothing'
+(cd "$tmp/project" && ALICE_LIB_ROOT="$root" "$root/scripts/run-green.sh" ./green build >/dev/null) || fail 'ALICE_LIB_ROOT build failed'
+[ -f "$tmp/project/.colors/alice-fixture/0/compute.tf.json" ] || fail 'copied payload rendered nothing'
 ok 'working-tree override renders from a copied payload'
 mkdir -p "$tmp/project/deep/path"
-(cd "$tmp/project/deep/path" && ALICE_LIB_ROOT="$root" ../../green build >/dev/null) || fail 'upward desired-state search failed'
+(cd "$tmp/project/deep/path" && ALICE_LIB_ROOT="$root" "$root/scripts/run-green.sh" ../../green build >/dev/null) || fail 'upward desired-state search failed'
 ok 'finds colors.yml by walking upward'
 
-out=$(cd "$tmp/project" && ALICE_LIB_ROOT="$root" ./green nonsense 2>&1 || true)
+out=$(cd "$tmp/project" && ALICE_LIB_ROOT="$root" "$root/scripts/run-green.sh" ./green nonsense 2>&1 || true)
 grep -q Usage <<<"$out" || fail 'unknown command has no usage'
 for verb in build create sync delete validate describe tunnel; do
   grep -q "\"$verb\"" "$launcher" || fail "missing command $verb"

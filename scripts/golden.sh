@@ -3,7 +3,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 state="$root/test/fixtures/colors.yml"
-optout="$root/test/fixtures/optout.yml"
+referenced="$root/test/fixtures/referenced.yml"
 goldens="$root/test/resources/golden"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -15,7 +15,7 @@ build() {
   local fixture=$2
   shift 2
   (cd "$root" && env ALICE_LIB_ROOT="$root" COLORS_PAR_WORKDIR="$tmp/$variant" "$@" \
-    ./green build -f "$fixture" >/dev/null)
+    "$root/scripts/run-green.sh" "$root/green" build -f "$fixture" >/dev/null)
   if [ "$accept" = 1 ]; then
     rm -rf "$goldens/$variant"
     mkdir -p "$goldens/$variant"
@@ -27,28 +27,25 @@ build() {
   fi
 }
 
-# Three variants. `local` and `r2` are the two backends in keygen mode; `optout`
-# supplies an explicit key id and must render the historical shape, creating no
-# account key resource. The SSH Keypair Standard has two modes and a package
-# conforms only if both hold.
+# Each node owns its remote keypair; the third variant pins an existing VPC.
 build s3 "$state" COLORS_PAR_PROVIDER_BACKEND=s3 COLORS_PAR_S3_BUCKET=alice-state COLORS_PAR_S3_REGION=eu-west-1
 build r2 "$state"
-build optout "$optout" COLORS_PAR_PROVIDER_BACKEND=s3 COLORS_PAR_S3_BUCKET=alice-state COLORS_PAR_S3_REGION=eu-west-1
+build referenced "$referenced" COLORS_PAR_PROVIDER_BACKEND=s3 COLORS_PAR_S3_BUCKET=alice-state COLORS_PAR_S3_REGION=eu-west-1
 
 base="$tmp/s3/alice-fixture"
-for stage in alice-infrastructure alice-ansible-local alice-ansible-remote alice-acceptance; do
+for stage in 0 alice-ansible-local alice-ansible-remote alice-acceptance; do
   [ -d "$base/$stage" ] || { echo "golden: missing stage $stage" >&2; exit 1; }
 done
 
-python3 "$root/scripts/compute-contract.py" "$base/alice-infrastructure" managed s3
-python3 "$root/scripts/compute-contract.py" "$tmp/r2/alice-fixture/alice-infrastructure" managed r2
-python3 "$root/scripts/compute-contract.py" "$tmp/optout/alice-optout-fixture/alice-infrastructure" external s3
+python3 "$root/scripts/compute-contract.py" "$base/0" discovered s3
+python3 "$root/scripts/compute-contract.py" "$tmp/r2/alice-fixture/0" discovered r2
+python3 "$root/scripts/compute-contract.py" "$tmp/referenced/alice-referenced-fixture/0" referenced s3
 local_play="$base/alice-ansible-local/main.yml"
 grep -q 'colors_keygen: true' "$local_play"
 grep -q 'IdentityAgent none' "$local_play"
 grep -q 'fcntl.flock' "$local_play"
 grep -q 'os.replace' "$local_play"
-grep -q 'colors_keygen: false' "$tmp/optout/alice-optout-fixture/alice-ansible-local/main.yml"
+grep -q 'colors_keygen: true' "$tmp/referenced/alice-referenced-fixture/alice-ansible-local/main.yml"
 
 # A build that reached the real ~/.ssh would leak the operator's home into
 # committed bytes and make the goldens workstation-specific.
@@ -66,8 +63,8 @@ for variant_base in "$tmp"/*/*; do
     exit 1
   fi
 done
-grep -q 'alice-fixture/compute/shared.tfstate' \
-  "$tmp/r2/alice-fixture/alice-infrastructure/shared/backend.tf.json"
+grep -q 'alice-fixture/alice-node-0.tfstate' \
+  "$tmp/r2/alice-fixture/0/backend.tf.json"
 
 play="$base/alice-ansible-remote/main.yml"
 grep -q 'transmission-daemon' "$play"
@@ -84,4 +81,5 @@ if grep -rEq 'DIGITALOCEAN_TOKEN\s*=|COLORS_PAR_DO_TOKEN|REPLACE_ME|dop_v1_|gith
   exit 1
 fi
 
+python3 "$root/scripts/ssh-config-contract.py"
 echo 'all Alice goldens and safety assertions pass'

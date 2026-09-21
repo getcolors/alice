@@ -52,8 +52,32 @@ resources.
 
 MIT.
 
-Compute provisioning uses the pinned colors-compute library, including SSH key
-ownership, default or explicit VPC selection, and remote S3/R2 state. Alice
-passes a singleton topology and application firewall policy. Existing monolithic
-`<profile>/alice-infrastructure.tfstate` deployments require explicit migration.
-The SSH config play remains package-owned and serializes atomic updates.
+Compute provisioning uses one `colors-compute` node with identifier `0` and
+state filename `alice-node-0.tfstate`. Alice supplies the firewall policy and
+orders provisioning, Ansible, download verification, and destruction. The
+Droplet is named `<profile>-0`.
+
+OpenTofu runs in `<workdir>/<profile>/0/`. Templates and `.terraform/` remain
+after deletion. SSH keys belong to the node: local state is authoritative for
+the local backend; remote backends use authoritative S3 key objects. Access
+files are refreshed from that authority before application access. The
+package-owned SSH config block points to that SDK copy.
+
+S3/R2 store state under `<s3-prefix>/<profile>/alice-node-0.tfstate`. A local
+backend stores state and authoritative keys in the node directory, with no S3
+requirement. See the configuration reference for remote-backend credentials.
+
+Existing monolithic or shared/node state requires explicit migration. This
+adapter does not adopt old keys, registrations, or cloud resources automatically.
+
+For working-tree dependency tests:
+
+```sh
+export COLORS_COMPUTE_LIB_ROOT=/absolute/path/to/colors-compute/green
+bb -Sdeps '{:deps {io.github.getcolors/colors-compute {:local/root "/absolute/path/to/colors-compute/green"}}}' test
+bb golden
+./scripts/launcher.sh
+```
+
+Golden and launcher checks honor `COLORS_COMPUTE_LIB_ROOT`. The launcher SHA
+remains managed by `bb pin`; development does not invent or change that stamp.

@@ -1,16 +1,15 @@
 (ns io.github.getcolors.alice.ssh
   "Application SSH arguments; colors-compute owns key lifecycle."
-  (:require [clojure.java.io :as io] [io.github.getcolors.compute-ssh :as ssh]))
+  (:require [clojure.java.io :as io] [io.github.getcolors.alice.compute :as compute]))
 (def build-placeholder-dir "/home/build-placeholder/.ssh")
 (defn rendered-only? [opts] (or (= :build (:green/event opts)) (boolean (:green/dry-run opts))))
 (defn with-machine-key [opts]
-  (if (not= "managed" (:mode (ssh/mode opts))) opts
-      (let [path (if (rendered-only? opts) (str build-placeholder-dir "/" (:profile opts)) (:ssh-private-key-path opts))]
-        (cond-> opts path (assoc :ssh-private-key-path path :ssh-public-key-path (str path ".pub"))))))
+  (let [path (if (rendered-only? opts) (compute/placeholder-key opts) (:ssh-private-key-path opts))]
+    (cond-> opts path (assoc :ssh-private-key-path path :ssh-public-key-path (str path ".pub")))))
 (defn identity-args [opts] (if-let [path (:ssh-private-key-path opts)] ["-i" path "-o" "IdentitiesOnly=yes"] []))
 (defn private-key-path [opts]
   (when-not (:ssh-private-key-path opts) (throw (ex-info "deployment SSH identity unavailable" {})))
   (.getAbsolutePath (io/file (:ssh-private-key-path opts))))
 
-(defn keygen? [opts] (= "managed" (:mode (ssh/mode opts))))
+(defn keygen? [_] true)
 (defn public-key-path [opts] (str (private-key-path opts) ".pub"))

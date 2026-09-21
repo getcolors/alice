@@ -21,11 +21,10 @@
   (or (not-empty (str (:profile opts))) "alice"))
 
 (defn identity-file
-  "`~/.ssh/<profile>`, written with a literal tilde rather than an expanded home
-  directory. OpenSSH expands it, and leaving it unexpanded is what keeps the
-  rendered block identical on every workstation."
+  "The authoritative remote key's local SDK copy, supplied by colors-compute."
   [opts]
-  (str "~/.ssh/" (host-alias opts)))
+  (or (:ssh-private-key-path opts)
+      (throw (ex-info "compute SSH identity unavailable" {}))))
 
 (defn config-path []
   (io/file (System/getProperty "user.home") ".ssh" "config"))

@@ -1,13 +1,5 @@
-# Opt-out fixture: both optional keys are present, so the package must pin what
-# it was given and discover nothing. digitalocean-ssh-keys means no key material
-# is generated, validated, or deleted, no account key resource is created, and
-# the ~/.ssh/config block carries no IdentityFile pair (standards/ssh-keypair.md
-# §1, standards/ssh-config.md §3). digitalocean-vpc-uuid means the compute
-# template declares no VPC data source and no postcondition. digitalocean-name
-# means the Droplet takes that label instead of the profile, which is the
-# override side of standards/compute-name.md — this fixture carries every
-# opt-out so one golden proves them all.
-profile: alice-optout-fixture
+# Explicit VPC, with a node-owned remote SSH keypair.
+profile: alice-referenced-fixture
 workdir: .colors
 provider-compute: digitalocean
 provider-dns: false
@@ -19,7 +11,6 @@ digitalocean-region: ams3
 digitalocean-size: s-1vcpu-1gb-35gb-intel
 digitalocean-image: ubuntu-24-04-x64
 digitalocean-vpc-uuid: 00000000-0000-4000-8000-000000000000
-digitalocean-ssh-keys: "812184"
 transmission-rpc-port: 9091
 transmission-tunnel-local-port: 19091
 transmission-local-directory: ~/Downloads/alice

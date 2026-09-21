@@ -1,106 +1,97 @@
 # Configuration
 
 `colors.yml` is a flat, non-secret YAML map. The reference deployment is
-`alice-digitalocean/colors.yml`. Validation reports every desired-state problem
-together.
+`alice-digitalocean/colors.yml`. Never export `COLORS_PAR_PROFILE` or embed
+credentials in desired state. `COLORS_PAR_COMPUTE_PREVENT_DESTROY` is ignored.
 
-## Credential
+## Credentials and storage
 
-| Purpose | Environment variable |
+| Purpose | Credentials |
 |---|---|
-| DigitalOcean API | `COLORS_PAR_DO_TOKEN` |
-| R2 backend | `COLORS_PAR_R2_ACCESS_KEY_ID`, `COLORS_PAR_R2_SECRET_ACCESS_KEY` |
-| S3 backend | Ambient AWS credential chain |
+| DigitalOcean compute | `COLORS_PAR_DO_TOKEN` |
+| R2 state and keys | `COLORS_PAR_R2_ACCESS_KEY_ID`, `COLORS_PAR_R2_SECRET_ACCESS_KEY` |
+| AWS S3 state and keys | Ambient AWS credential chain |
+| Separate key storage for GCS state | Ambient AWS chain, or both `COLORS_PAR_SSH_S3_ACCESS_KEY_ID` and `COLORS_PAR_SSH_S3_SECRET_ACCESS_KEY` |
 
-Never export `COLORS_PAR_PROFILE`.
+S3/R2 state uses `<s3-prefix>/<profile>/alice-node-0.tfstate`, with an empty
+prefix by default. Key objects use `<s3-prefix>/<profile>/0/ssh-key` and
+`ssh-key.pub`. S3-compatible remote state uses its bucket for those key objects.
 
-The package refuses to run against a `~/.ssh/config` that already declares
-`Host <profile>` outside its own markers, or whose first option stands above the
-first `Host` line. The first may be the operator's only record of how to reach
-something; the second would be captured into this deployment's stanza by the
-top-of-file insert and silently narrowed from a global setting to one host.
-Both name the file and line and leave the decision to a human.
+The local backend owns the keypair in local OpenTofu state and needs no S3
+settings or credentials. Access files are refreshed from that state.
+
+With a GCS backend, configure nonsecret `ssh-s3-bucket` and
+`ssh-s3-region`. Set `ssh-s3-endpoint` for a compatible service such as R2.
+An endpoint does not change which credential variables apply: separate key
+storage uses `COLORS_PAR_SSH_S3_*`.
+
+Remote key objects and the generated keypair are OpenTofu resources in the
+node's state. State and saved plans contain private key material and require
+private, encrypted storage. Local key files are disposable copies; existing
+local keys are never uploaded or adopted.
 
 ## Desired state
 
-Required keys select the unique profile/work directory, DigitalOcean compute,
-and S3/R2 state backend. DigitalOcean needs a region, size, and image —
-not a Droplet name, which defaults to the profile.
+Required keys select a stable profile/workdir, DigitalOcean compute, and a
+state backend. DigitalOcean requires region, size, and image. Alice requests
+node `0`, named `<profile>-0`, and provides filename `alice-node-0.tfstate`.
 
-Alice also accepts:
+OpenTofu runs in `<workdir>/<profile>/0/`, with its normal `.terraform/` folder.
+For a local backend, the state file is also in that directory. Build writes
+Terraform templates without provisioning. Templates and initialization files
+are retained after node destruction.
 
-- `digitalocean-name` — the Droplet's name. Omit it and the Droplet is named
-  after the profile, which is already what keys OpenTofu state, names the
-  machine keypair and its DigitalOcean registration, and serves as the
-  `~/.ssh/config` alias; the machine's own label should not be the one place
-  that disagrees. Supply one only for an account whose naming policy a profile
-  cannot satisfy, or an existing Droplet being adopted, and it is checked for
-  shape (`standards/compute-name.md`). Changing it renames the Droplet at
-  DigitalOcean but never the running guest's hostname, which cloud-init set at
-  creation — a name change takes effect on the next create;
-- `digitalocean-vpc-uuid` — an existing VPC UUID. Omit it and the region's
-  default VPC is discovered at runtime through a `digitalocean_vpc` data
-  source, with the apply asserting that the discovered VPC really is the
-  account default. Supply one only to target a VPC that is not the regional
-  default; a supplied value is checked for UUID shape and the library reads its
-  observed CIDR and verifies its region without owning the VPC;
-- `digitalocean-ssh-keys` — an existing SSH key ID or fingerprint. Omit it and
-  the package owns the machine keypair instead: it generates
-  `~/.ssh/<profile>`(`.pub`), registers a DigitalOcean key named after the
-  profile, and removes both once the Droplet is destroyed. Presence is the only
-  switch — in opt-out mode no key material is generated, validated, or deleted,
-  and the managed block carries no `IdentityFile`;
-- `transmission-rpc-port` — remote loopback RPC port, normally 9091;
-- `transmission-tunnel-local-port` — default local forwarding port, normally 19091;
-- `transmission-local-directory` — local destination that directly receives the
-  contents of Transmission's download directory;
-- `transmission-magnet-links` — list of quoted public magnet URIs, each with a
-  unique 40-character BTIH hash. The key is required but the list may be empty:
-  `[]` is desired state meaning no torrent is wanted.
+Alice accepts:
 
-Keep `compute-prevent-destroy: true`. There is no `package` key: it could hold
-exactly one value, so desired state no longer carries it.
-`COLORS_PAR_COMPUTE_PREVENT_DESTROY` is ignored. The explicit `delete` event
-owns manual destruction authorization; `sync` owns only its successful final
-cleanup.
+- `digitalocean-vpc-uuid`: existing VPC. If omitted, the region's default VPC is
+  discovered and verified. Alice never owns that VPC.
+- `alice-ssh-sources`: explicit SSH ingress CIDRs; an empty list is invalid.
+- `transmission-rpc-port`: remote loopback RPC port, normally 9091.
+- `transmission-tunnel-local-port`: local forwarding port, normally 19091.
+- `transmission-local-directory`: destination receiving download-directory contents.
+- `transmission-magnet-links`: required list of quoted magnet URIs, each with a
+  unique 40-character BTIH hash. `[]` means no torrent is wanted.
+
+External SSH-key references are no longer supported. The node owns its
+keypair and provider registration. Keep `compute-prevent-destroy: true` in
+desired state. Explicit `delete` authorizes destruction; `sync` authorizes it
+only after every desired torrent completes and the final checksummed copy succeeds.
 
 ## Lifecycle
 
-The pinned colors-compute library verifies state ownership, checks provider
-registration and records key intent before generation. It resolves the default
-or explicit VPC, provisions one node, writes `Host <profile>` into `~/.ssh/config`, installs Transmission, forces RPC onto loopback, and verifies the web UI through
-a real SSH tunnel. RPC password authentication is disabled because loopback plus
-SSH is the sole access boundary. Ubuntu 24.04's packaged AppArmor 4 profile
-cannot notify systemd even in complain mode, so the playbook disables that
-profile before starting the service. Delete removes the managed SSH block before
-destroying the Droplet, and the local keypair only after the destroy has
-succeeded. A failed delete retains the key. Compute state and its ownership
-journal are remote under `<profile>/compute/`; generated build files contain
-only non-secret backend settings.
+Create provisions the compute node and key resources through one locked
+OpenTofu state. It retrieves the authoritative keypair from local state or remote
+objects into the SDK node directory, overwriting the access copy, then writes the package-owned
+`Host <profile>` block in `~/.ssh/config`. That block and Ansible use the SDK
+key path, with `IdentitiesOnly` and `IdentityAgent none`.
 
-`sync` creates or resumes the deployment, opens and prints the private UI
-tunnel, adds missing desired magnets, and rsyncs whenever another desired
-torrent completes. Once all are complete it stops Transmission and performs a
-checksummed final rsync before deleting the Droplet. With an empty
-`transmission-magnet-links` the desired set is satisfied immediately, so `sync`
-provisions, proves the UI over the tunnel, copies the download directory as it
-stands, and then deletes — use `create` and `tunnel` instead when the intent is
-a UI to keep open. Rsync copies the remote
-directory contents directly into the local destination, supports partial
-transfers, and never uses `--delete`. Any failure or interruption retains the
-Droplet and state for a retry.
+The package refuses to overwrite a foreign SSH alias or to capture global
+options above the first `Host` block. Ansible installs Transmission, binds RPC
+to `127.0.0.1`, and disables the Ubuntu 24.04 Transmission AppArmor profile
+that prevents systemd notification. Create verifies the web UI over an SSH
+local forward. Port 9091 is never exposed publicly.
 
-Generated output is reproducible and may contain the Droplet's public address,
-but never credentials. Do not edit or commit it.
+`sync` provisions or resumes the node, opens the private UI tunnel, adds desired
+magnets, and incrementally copies completed downloads. It stops Transmission
+for the final checksummed rsync, then removes the SSH alias and destroys the
+node. Node destruction precedes removal of its key resources and local copies.
+Any failed download, copy, or state read stops cleanup and retains recovery material.
 
-## Recovery
+An empty magnet list completes immediately after one copy. Use `create` plus
+`tunnel` for a UI that should stay open. Rsync never uses `--delete`.
 
-A repeated `create` converges the same state. If Transmission is inactive, SSH
-to the profile and inspect `systemctl status transmission-daemon` and
-`journalctl -u transmission-daemon`. If the local alias is stale, rerun create;
-do not edit `.colors/`. Unreadable or foreign state stops the lifecycle.
-Legacy `<profile>/alice-infrastructure.tfstate` must be migrated explicitly
-before running this version against an existing deployment.
+## Recovery and migration
 
-The provider firewall allows SSH22 and Transmission peer TCP/UDP51413, with
-outbound traffic allowed. RPC9091 remains loopback-only.
+Repeated create uses the same node directory and state key. State read failures
+never mean absence. Foreign remote keys, missing ownership, and provider changes
+require explicit recovery; local keys cannot repair missing state ownership.
+
+Old `<profile>/alice-infrastructure.tfstate` and `<profile>/compute/` states
+belong to earlier architectures. Retain their resources and files until an
+explicit state transfer or verified old deployment deletion is complete. A new
+filename does not migrate or adopt existing infrastructure.
+
+If Transmission is inactive, inspect its service status and journal over SSH.
+Use `./green tunnel 19091` and open
+`http://127.0.0.1:19091/transmission/web/` for private access. Do not manually edit
+generated files.

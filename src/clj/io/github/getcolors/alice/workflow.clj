@@ -10,8 +10,7 @@
             [io.github.getcolors.alice.sync :as sync]
             [io.github.getcolors.alice.tools :as tools]
             [io.github.getcolors.alice.validate :as validate]
-            [io.github.getcolors.alice.compute :as compute]
-            [io.github.getcolors.compute-planning :as planning]))
+            [io.github.getcolors.alice.compute :as compute]))
 
 (def defaults
   {:compute-prevent-destroy true
@@ -49,7 +48,7 @@
            (fn [opts _ _] (validate/state-errors opts))
            (fn [opts _ {:keys [event]}]
              (when (= :validate event)
-               (try (planning/validate-deployment opts (compute/topology opts) (compute/requirements opts)) []
+               (try (compute/plan opts) []
                     (catch Exception e [(ex-message e)]))))
            (fn [opts _ {:keys [event real?]}]
              (when (and real? (credential-events event))

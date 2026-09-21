@@ -24,126 +24,106 @@ bb golden
 Never run real create/delete without explicit authorization. Never edit or read
 `.colors/`, and never read `.envrc.private`.
 
-## Two optional keys, one idiom
+## Compute boundary and identity
 
-`digitalocean-ssh-keys` and `digitalocean-vpc-uuid` are both optional, and in
-both cases **presence is the only switch** — there is no mode flag. Omit them
-and the package supplies the answer itself; supply them and it uses what it was
-given. The compute library validates an explicit VPC UUID through a data lookup; it never owns that VPC.
+Alice supplies one stable node identifier, `0`, and state filename
+`alice-node-0.tfstate` to colors-compute. The node is named `<profile>-0`.
+Alice owns application ordering: provisioning, SSH config, Ansible, downloads,
+checksummed copy, and teardown. The compute library owns the node and its key
+resources; it does not expand topology or orchestrate a deployment.
 
-`digitalocean-vpc-uuid` absent means the region's default VPC is read through a
-`digitalocean_vpc` data source, and the Droplet's `lifecycle` asserts
-`data.digitalocean_vpc.default.default` so a region that answered with some
-other VPC fails the apply instead of placing the Droplet on an unexpected
-network silently. A UUID is an opaque account-specific value that says nothing
-a reader can check, goes stale when an account changes, and has to be looked up
-by hand before a deployment can exist; the region already determines it. The
-explicit key remains the escape hatch for a VPC that is not the regional
-default. A supplied UUID is still shape-checked — optional is not unvalidated.
-Nothing discovered is ever written back into desired state.
+OpenTofu runs in `<SDK workdir>/<profile>/0/` and uses its default `.terraform/`
+directory. Build renders templates there without provisioning. Templates,
+initialization files, and the node directory are never deleted by cleanup.
+The S3 state key is `<s3-prefix>/<profile>/alice-node-0.tfstate`; local state
+lives at `<SDK workdir>/<profile>/0/alice-node-0.tfstate`. An empty S3 prefix
+omits its separator.
 
-## The machine keypair and the SSH alias
+There is no lifecycle journal, coordinator, retirement marker, or shared state.
+Native OpenTofu state locking protects infrastructure operations; the SDK/caller
+serializes operations sharing a working directory. Preserve old monolithic and
+shared/node states until their ownership has been explicitly transferred or the
+old resources have been verified destroyed. New filenames do not adopt resources.
 
-The package implements the workspace standards `standards/ssh-keypair.md` and
-`standards/ssh-config.md`. Absence of `digitalocean-ssh-keys` in desired state
-is keygen mode and the only switch: the package generates
-`~/.ssh/<profile>`(`.pub`), declares a `digitalocean_ssh_key` named after the
-profile in its own state, writes a `~/.ssh/config` block aliased `<profile>`
-with `IdentityFile`/`IdentitiesOnly`/`IdentityAgent none`, and removes all of
-it on the way out.
-Supplying an explicit key id is opt-out: no key material is generated,
-validated, or deleted, no account key resource is created, and the block carries
-no `IdentityFile`, because the operator has their own arrangements for finding
-their key and guessing is worse than silence.
+## Existing VPC
 
-Key lifecycle belongs to the pinned colors-compute library; the `~/.ssh/config` play
-is deliberately alice's own copy, because that file is shared with every other
-host the operator reaches and an unrelated upstream change must not rewrite it
-at pin-bump time. There is no rotation verb: Droplet key sets are ForceNew, so
-rotation is `delete` then `create`.
+`digitalocean-vpc-uuid` is optional. Presence selects an explicit existing VPC;
+absence discovers the region's default VPC. The library validates the reference,
+reads its CIDR, and asserts that default discovery really returned the account
+default. Alice never owns the VPC. Nothing discovered is written into desired state.
 
-The managed block is not what the remote stage connects with. `ansible.cfg`
-passes `-F /dev/null`, so the run cannot depend on a shared file the local
-stage is rewriting in the same create, and that also discards the block's
-`IdentityFile`. In keygen mode the rendered `inventory.json` therefore names
-`ansible_ssh_private_key_file` itself — a path, never key material, through the normalized library result. Remove it and a create succeeds only on a workstation whose agent
-already holds the generated key, and fails `Permission denied (publickey)`
-everywhere else. The keygen inventory also carries
-`ansible_ssh_common_args: -o IdentitiesOnly=yes -o IdentityAgent=none`: the
-generated key is passphrase-less and ephemeral, so the agent contributes
-nothing, while stale agent copies of superseded machine keys — banked by
-`AddKeysToAgent`, outliving the deleted file — would otherwise be offered
-first and exhaust `MaxAuthTries` as `Too many authentication failures`.
-`IdentityAgent none` in both the inventory and the managed block keeps the
-agent out of every path the package owns; opt-out mode says nothing, because
-the operator's own key arrangements may include the agent.
+## Node keys and SSH alias
 
-The compute library journals key intent before generation and refuses to adopt
-unowned key files or provider registrations. An unreadable backend never means
-absence. Managed key cleanup happens only after confirmed node, shared resource
-and registration destruction. Interrupted cleanup can be retried through the
-owned lifecycle; do not delete keys based on a failed state read.
+The node always owns its ED25519 keypair and DigitalOcean key registration.
+External SSH-key references and local-key adoption are unsupported.
 
-`sync` is the one place alice departs from the letter of the keypair standard,
-which bars a `sync` from touching key material. That clause is written for
-packages where `sync` is auxiliary and leaves the machine alone; alice's `sync`
-*is* the lifecycle. The DAG resolves it rather than deviating: the teardown
-steps run relabelled as `:delete` through `workflow/as-event`, so what executes
-is still a create and still a delete, and `sync` has no key lifecycle of its
-own. Do not "simplify" that relabelling away — the library dispatches lifecycle operations by `:green/event`.
+For the local backend, the TLS keypair in local OpenTofu state is authoritative;
+there is no S3 dependency. For remote backends, the managed S3-compatible key
+objects are authoritative. GCS state requires separate `ssh-s3-bucket` and
+`ssh-s3-region` settings, optionally `ssh-s3-endpoint`. Local backends reject
+those remote-key settings.
 
-The marker is mid-migration. Alice used to write `# BEGIN alice <alias> ...`;
-the standard's marker carries the alias alone. `ansible-local/main.yml` removes
-the superseded block before writing the new one, and `ssh-config.clj`
-recognises the old marker as its own so the ownership check does not refuse the
-migration meant to clean it up. Retire the removal task and the superseded
-markers together, one pin cycle from now, or not at all.
+Before application access, colors-compute overwrites `ssh-key` and `ssh-key.pub`
+in the node directory from the authoritative source, verifies the pair and its
+fingerprint, and applies private permissions. Existing copies are never uploaded
+or adopted. Missing state beside surviving local copies requires recovery.
+Unreadable state never proves resource absence. State and saved plans contain
+private material and must remain private.
+
+The package-owned `~/.ssh/config` play writes alias `<profile>` with the actual
+SDK key path, `IdentitiesOnly yes`, and `IdentityAgent none`. It validates
+ownership and serializes atomic updates because that config is shared with
+unrelated hosts. Do not replace it with an unreviewed library copy.
+
+Ansible uses `-F /dev/null`, so its inventory must independently include
+`ansible_ssh_private_key_file` from the library's normalized output and
+`ansible_ssh_common_args: -o IdentitiesOnly=yes -o IdentityAgent=none`.
+
+The old `# BEGIN alice <alias> ...` SSH marker remains recognized alongside
+the current alias-only marker. Retire recognition and removal together, never
+one without the other.
 
 ## Architecture and safety
 
 Create is `start -> infrastructure -> ansible-local -> ansible-remote ->
-acceptance`. Delete is `start -> load-infrastructure -> ansible-local -> infrastructure
--> generated-cleanup`: the managed `~/.ssh/config` block goes before the destroy
-and the keypair strictly after it. Those two orders disagree deliberately — a
-stale block is harmless, a key removed ahead of its Droplet locks you out of a
-machine that still exists — and `standards/ssh-config.md` §4 forbids tidying
-them into agreement. Build and dry-run are credential-free. Validate reports desired-state, local tool and library credential-presence errors. Provider account checks belong to the library lifecycle.
+acceptance`. Delete is `start -> load-infrastructure -> ansible-local ->
+infrastructure -> generated-cleanup`. Remove the SSH alias before destroying
+the node; remove key resources and working copies only after confirmed node
+destruction. A failed operation retains recovery material.
 
-Credentials use only `COLORS_PAR_*` and never render. `COLORS_PAR_PROFILE` is
-always refused. Keep `compute-prevent-destroy: true` in desired state;
-`COLORS_PAR_COMPUTE_PREVENT_DESTROY` is ignored. Explicit `delete` authorizes
-manual destruction. `sync` authorizes destruction only after every desired
-torrent is complete and the final checksummed rsync succeeds.
+`sync` hosts a create and, only after all desired torrents finish and the final
+checksummed rsync succeeds, a delete. Its teardown stages remain relabelled with
+`workflow/as-event :delete` so package event guards retain their meaning.
 
-The Droplet is named after the profile (`standards/compute-name.md`).
-`digitalocean-name` is an optional override, resolved once by
-the library deployment request so each node renders one name —
-the same "presence is the only switch" shape as the VPC and the keypair. There
-is no `package` key in desired state: it could hold exactly one value.
+Build and dry-run are credential-free. Validate checks desired state, tools,
+and credential presence. Credentials use only the documented environment inputs
+and never render. `COLORS_PAR_PROFILE` is always refused. Keep
+`compute-prevent-destroy: true` in desired state; its environment override is
+ignored. Explicit delete authorizes manual destruction; sync authorizes only
+successful post-copy teardown.
 
-`transmission-magnet-links` may be empty. `[]` is desired state — no torrent is
-wanted — not a validation failure, so `create` still provisions the private UI.
-It does mean `sync` satisfies its desired set on the first `torrent-get` and
-tears the Droplet down after one copy; `create` plus `tunnel` is the verb pair
-for a UI meant to stay open.
+`transmission-magnet-links: []` means no torrent is wanted. It is valid desired
+state, but sync then copies once and destroys the node. Use create plus tunnel
+for a UI intended to stay open. Magnet query components are URL-decoded once;
+encoded `xt=urn%3Abtih%3A...` is accepted without inventing query parameters from
+escaped delimiters.
 
-The package requests one existing-network node through colors-compute. Provider
-recipes, credentials, default/explicit VPC selection, SSH keys and remote S3/R2
-state belong to that dependency; there is no package compute registry or
-template. New provider capabilities arrive with a library version bump. The UI is
-not a public service: Transmission RPC binds 127.0.0.1, RPC password auth is
-disabled because SSH is the only access boundary, and acceptance opens a
-short-lived SSH local forward before curling the web UI. `sync` keeps its own
-forward open, prints the UI URL, adds desired magnets, incrementally rsyncs
-completed downloads directly into the configured local directory, stops the
-daemon for a final checksummed rsync, and only then deletes the deployment.
-Failures retain the Droplet and state. Remote compute objects live under `<profile>/compute/`. Legacy monolithic
-`<profile>/alice-infrastructure.tfstate` requires explicit migration.
+Transmission RPC binds to `127.0.0.1`, with SSH as the authentication boundary.
+Create must finish the real tunneled UI acceptance check. Sync opens its own
+forward, adds magnets, incrementally copies downloads, stops the daemon for a
+final checksummed copy, then tears down. Rsync never uses `--delete`.
 
-Ubuntu 24.04's AppArmor 4 Transmission profile returns EACCES for systemd's
-disconnected notify socket even in complain mode, causing every service start to
-time out. The playbook disables that broken profile and verifies it is unloaded.
-Do not remove that task without proving the packaged profile can notify systemd.
+Ubuntu 24.04's AppArmor 4 Transmission profile prevents systemd notification.
+The playbook disables that broken profile and verifies it is unloaded. Do not
+remove that step without proving the packaged profile can notify systemd.
+
+## Repeated deletion
+
+Only a successful library inspection of readable state with both empty resources
+and empty outputs confirms destruction. Repeated Alice delete then skips former
+hosts, removed keys, and infrastructure operations and resumes generated-file
+cleanup. Missing or unreadable state still refuses. Cleanup retains compute
+templates, initialization files, state, and unrelated files.
 
 ## Pins and installed launchers
 
@@ -171,11 +151,3 @@ paths already encode the repository. Never add one tag without the other.
 ## Git
 
 Work on the current branch. Do not commit or push unless explicitly authorized.
-
-### Repeated deletion after compute retirement
-
-A repeated `delete` with validated retired compute ownership resumes only the
-local generated-file cleanup. It does not require removed SSH keys or contact
-the former hosts, DNS, registry, or other application cloud resources. Failed
-ownership inspection still stops deletion. Local cleanup preserves unrelated
-files and is safe to repeat.

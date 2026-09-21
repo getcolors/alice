@@ -11,19 +11,13 @@
    :digitalocean-size "s-1vcpu-1gb-35gb-intel"
    :digitalocean-image "ubuntu-24-04-x64"
    :digitalocean-vpc-uuid "00000000-0000-4000-8000-000000000000"
-   ;; An explicit key id: `base` is opt-out mode, the shape every existing
-   ;; deployment has. `keygen-base` below drops it, which is the only switch.
-   :digitalocean-ssh-keys "812184"
    :transmission-rpc-port 9091
    :transmission-tunnel-local-port 19091
    :transmission-local-directory "~/Downloads/alice"
    :transmission-magnet-links
    ["magnet:?xt=urn:btih:4cdce46e0cda3be676d4d3ae7ba1a1e42a24f2af&dn=fixture"]})
 
-(def keygen-base
-  "Keygen mode: the package owns the machine keypair because desired state
-  supplies no key. Presence of `digitalocean-ssh-keys` is the only switch."
-  (dissoc base :digitalocean-ssh-keys))
+(def keygen-base base)
 
 (def discovery-base
   "Both optional keys omitted — the default shape of a deployment."
@@ -57,4 +51,11 @@
 (deftest local-tools-and-library-credential-names
  (is (= (count validate/required-tools) (count (validate/runtime-errors base (fn [& _] {:exit 1})))))
  (is (empty? (validate/runtime-errors base (fn [& _] {:exit 0}))))
- (is (some #(clojure.string/includes? % "COLORS_PAR_DO_TOKEN") (validate/secret-errors base))))
+ (is (some #(clojure.string/includes? % "COLORS_PAR_DO_TOKEN") (validate/secret-errors (assoc base :do-token "REPLACE_ME")))))
+
+(deftest local-backend-does-not-require-aws-cli
+  (let [commands (atom [])]
+    (is (empty? (validate/runtime-errors (assoc base :provider-backend "local")
+                  (fn [argv _] (swap! commands conj (last argv)) {:exit 0}))))
+    (is (not (some #{"aws"} @commands)))
+    (is (some #{"tofu"} @commands))))

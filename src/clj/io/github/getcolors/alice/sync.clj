@@ -10,10 +10,24 @@
 (def poll-interval-ms 30000)
 
 (defn magnet-info-hash [magnet]
-  (some->> (re-find #"(?i)(?:^|[?&])xt=urn:btih:([0-9a-f]{40})(?:&|$)"
-                    (str magnet))
-           second
-           str/lower-case))
+  (try
+    (when (string? magnet)
+      (let [uri (java.net.URI. magnet)
+            query (.getRawSchemeSpecificPart uri)]
+        (when (and (= "magnet" (some-> (.getScheme uri) str/lower-case))
+                   (str/starts-with? query "?"))
+          ;; Split before decoding: an escaped ampersand inside dn/tr must not
+          ;; become another query parameter. Decode each component exactly once.
+          (let [decode #(java.net.URLDecoder/decode % "UTF-8")
+                hashes (->> (str/split (subs query 1) #"&")
+                            (keep (fn [part]
+                                    (let [[key value] (str/split part #"=" 2)]
+                                      (when (and value (= "xt" (str/lower-case (decode key))))
+                                        (some->> (re-matches #"(?i)urn:btih:([0-9a-f]{40})" (decode value))
+                                                 second str/lower-case)))))
+                            distinct vec)]
+            (when (= 1 (count hashes)) (first hashes))))))
+    (catch Exception _ nil)))
 
 (defn local-directory [opts]
   (let [configured (str (:transmission-local-directory opts))

@@ -9,10 +9,7 @@
             [green.workflow :as wf]
             [io.github.getcolors.alice.ssh-config :as ssh-config]
             [io.github.getcolors.alice.compute :as compute]
-            [io.github.getcolors.compute :as library]
-            [io.github.getcolors.compute-planning :as planning]
-            [io.github.getcolors.compute-orchestration :as orchestration]
-            [io.github.getcolors.compute-inspection :as inspection]
+            [io.github.getcolors.compute-node :as library]
             [io.github.getcolors.alice.utils :as utils]
             [io.github.getcolors.alice.validate :as validate]))
 
@@ -41,50 +38,41 @@
                               (str "[\n" (str/join ",\n" (map #(str (padding (+ indent 2)) (compute-json % (+ indent 2))) value)) "\n" (padding indent) "]"))
       :else (json/generate-string value))))
 
+(defn- with-node [opts node]
+  (cond-> (assoc opts :colors-compute/node node :ip (:ip node) :user (:user node) :green/exit 0)
+    (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node))))
+
 (defn infrastructure-step [opts]
   (try
     (let [planning? (or (= :build (:green/event opts)) (:green/dry-run opts))
+          deleting? (= :delete (:green/event opts))
+          options (assoc (compute/library-options opts) :compute-prevent-destroy (not deleting?))
           result (if planning?
-                   (planning/plan-deployment opts (compute/topology opts) (compute/requirements opts))
-                   (orchestration/orchestrate (assoc opts :green/event (if (= :sync (:green/event opts)) :create (:green/event opts)) :compute-prevent-destroy (not= :delete (:green/event opts))) (compute/topology opts) (compute/requirements opts)))]
-      (when planning?
-        (doseq [[stage key] (cons ["shared" (get-in result [:state_keys :shared])]
-                                 (map (fn [[id key]] [(str "nodes/" (name id)) key]) (get-in result [:state_keys :nodes]))) ]
-          (let [target (io/file (tool-dir opts infrastructure-tool) stage "backend.tf.json")]
-            (io/make-parents target)
-            (spit target (str (compute-json (:config (library/backend-plan opts key)) 0) "\n"))))
-        (doseq [[stage documents] (cons ["shared" (get-in result [:documents :shared])]
-                                      (map (fn [[id documents]] [(str "nodes/" id) documents]) (get-in result [:documents :nodes])))
-                [filename document] documents]
-          (let [target (io/file (tool-dir opts infrastructure-tool) stage filename)]
-            (io/make-parents target)
-            (spit target (str (compute-json document 0) "\n")))))
-      (if-not (contains? #{"ready" "planned" "destroyed"} (:status result))
-        (assoc opts :green/exit 1 :green/err (if (seq (:errors result)) (str/join "\n" (:errors result)) "compute lifecycle refused; inspect state ownership and configuration"))
-        (cond-> (assoc opts :green/exit 0)
-          (:shared result) (assoc :colors-compute/shared (:shared result))
-          (:cluster result) (assoc :colors-compute/cluster (:cluster result) :ip (get-in result [:cluster :nodes 0 :ip]) :user (get-in result [:cluster :nodes 0 :user]))
-          (get-in result [:key :private_key_path])
-          (assoc :ssh-private-key-path (if planning? (str/replace (get-in result [:key :private_key_path]) "$HOME/.ssh" "/home/build-placeholder/.ssh") (get-in result [:key :private_key_path]))))))
-    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute lifecycle refused; legacy monolithic state requires explicit migration"))))
+                   (library/build-node! options (compute/request opts))
+                   (library/compute-node! options (compute/request opts) (if deleting? "delete" "create")))]
+      (case (:status result)
+        "built" (with-node opts (compute/placeholder-node opts))
+        "ready" (with-node opts (:params result))
+        "destroyed" (assoc opts :green/exit 0)
+        (assoc opts :green/exit 1 :green/err "compute lifecycle refused; inspect state ownership and configuration")))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute lifecycle refused; inspect node state and configuration"))))
 
 (defn load-infrastructure-step [opts]
   (try
-    (let [result (inspection/read-deployment opts (into {} (System/getenv)) {} (compute/requirements opts))]
+    (let [result (library/compute-node! (compute/library-options opts) (compute/request opts)
+                                       (if (= :delete (:green/event opts)) "inspect" "prepare-access"))]
       (case (:status result)
-        "present" (let [node (first (get-in result [:cluster :nodes]))]
-                    (cond-> (assoc opts :colors-compute/cluster (:cluster result)
-                                       :colors-compute/shared (:shared result)
-                                       :ip (:ip node) :user (:user node) :green/exit 0)
-                      (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node))))
-        "destroyed" (if (= :delete (:green/event opts)) (assoc opts :alice/already-destroyed true :green/exit 0)
-                        (assoc opts :green/exit 1 :green/err "compute deployment is destroyed"))
-        (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required")))
-    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute inspection refused; existing owned state is required"))))
+        "ready" (with-node opts (:params result))
+        "destroyed" (if (= :delete (:green/event opts))
+                      (assoc opts :alice/already-destroyed true :green/exit 0)
+                      (assoc opts :green/exit 1 :green/err "compute node is destroyed"))
+        (assoc opts :green/exit 1 :green/err "compute inspection refused; existing node state is required")))
+    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute inspection refused; existing node state is required"))))
 
 (defn data-fn [opts]
   (let [node (compute/node opts)]
-    (merge opts {:host-alias (utils/host-alias opts) :ip (:ip node) :user (:user node)})))
+    (cond-> (merge opts {:host-alias (utils/host-alias opts) :ip (:ip node) :user (:user node)})
+      (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node)))))
 
 (defn inventory [opts]
   (let [{:keys [host-alias ip user ssh-private-key-path]} (data-fn opts)]
@@ -97,8 +85,7 @@
 (defn ansible-local-specs [opts]
   (let [dir (tool-dir opts ansible-local-tool)
         data (assoc (data-fn opts)
-                    :ssh-keygen (validate/keygen? opts)
-                    :ssh-config-identity-file (ssh-config/identity-file opts))]
+                    :ssh-keygen (validate/keygen? opts))]
     [(spec (template "ansible-local" "ansible.cfg")
            (str dir "/ansible.cfg") data)
      (spec (template "ansible-local" "inventory.ini")
@@ -115,6 +102,7 @@
      {:dir dir :inventory "inventory.ini"
       :playbooks {:create "main.yml" :delete "main.yml"}
       :extra-vars {:host_alias (:host-alias data)
+                   :ssh_identity_file (:ssh-private-key-path data)
                    :ssh_hosts [{:name (:host-alias data) :ip (:ip data) :user (:user data)}]
                    :ssh_legacy_marker_prefix "alice"
                    :block_state (if delete? "absent" "present")}}
