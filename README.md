@@ -81,3 +81,10 @@ bb golden
 
 Golden and launcher checks honor `COLORS_COMPUTE_LIB_ROOT`. The launcher SHA
 remains managed by `bb pin`; development does not invent or change that stamp.
+
+Compute failures identify the failed stage and command, resolved executable,
+exit code, and sanitized stderr. For example, an asdf `tofu` shim with no selected
+version reports the toolchain failure and suggests `direnv exec . ./green sync`
+when running sync. State-read failures and identity mismatches remain distinct.
+Only failures before apply say no infrastructure changes were made by that
+operation; failures during or after apply advise inspecting state before retry.

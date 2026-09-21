@@ -9,6 +9,7 @@
             [green.workflow :as wf]
             [io.github.getcolors.alice.ssh-config :as ssh-config]
             [io.github.getcolors.alice.compute :as compute]
+            [io.github.getcolors.alice.compute-error :as compute-error]
             [io.github.getcolors.compute-node :as library]
             [io.github.getcolors.alice.utils :as utils]
             [io.github.getcolors.alice.validate :as validate]))
@@ -54,8 +55,9 @@
         "built" (with-node opts (compute/placeholder-node opts))
         "ready" (with-node opts (:params result))
         "destroyed" (assoc opts :green/exit 0)
-        (assoc opts :green/exit 1 :green/err "compute lifecycle refused; inspect state ownership and configuration")))
-    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute lifecycle refused; inspect node state and configuration"))))
+        (compute-error/failed-result opts result)))
+    (catch InterruptedException e (throw e))
+    (catch Exception _ (compute-error/failed-result opts {:status "error"}))))
 
 (defn load-infrastructure-step [opts]
   (try
@@ -66,8 +68,9 @@
         "destroyed" (if (= :delete (:green/event opts))
                       (assoc opts :alice/already-destroyed true :green/exit 0)
                       (assoc opts :green/exit 1 :green/err "compute node is destroyed"))
-        (assoc opts :green/exit 1 :green/err "compute inspection refused; existing node state is required")))
-    (catch Exception _ (assoc opts :green/exit 1 :green/err "compute inspection refused; existing node state is required"))))
+        (compute-error/failed-result opts result)))
+    (catch InterruptedException e (throw e))
+    (catch Exception _ (compute-error/failed-result opts {:status "error"}))))
 
 (defn data-fn [opts]
   (let [node (compute/node opts)]

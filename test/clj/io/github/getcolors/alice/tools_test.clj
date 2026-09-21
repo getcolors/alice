@@ -89,3 +89,65 @@
   (is (= {"backups" true "region" "ams"}
          (cheshire.core/parse-string
           (#'io.github.getcolors.alice.tools/compute-json {:region "ams" "backups" true} 0)))))
+
+(deftest compute-startup-error-is-actionable
+  (let [failure {:status "error"
+                 :error {:code "command_failed" :stage "init"
+                         :message "Required command failed."
+                         :command ["tofu" "init"]
+                         :executable "/home/operator/.asdf/shims/tofu"
+                         :exit_code 126 :stderr "No version is set for command tofu"
+                         :infrastructure_changes "none"}}]
+    (with-redefs [io.github.getcolors.compute-node/compute-node! (fn [& _] failure)]
+      (let [result (tools/infrastructure-step (assoc vt/base :green/event :sync))
+            message (:green/err result)]
+        (is (= 1 (:green/exit result)))
+        (is (str/includes? message "Could not start OpenTofu: `tofu init` exited with code 126."))
+        (is (str/includes? message "Executable: /home/operator/.asdf/shims/tofu"))
+        (is (str/includes? message "No version is set for command tofu"))
+        (is (str/includes? message "direnv exec . ./green sync"))
+        (is (str/includes? message "No infrastructure changes were made by this operation."))
+        (is (not (str/includes? message "ownership")))))))
+
+(deftest compute-apply-failure-never-claims-no-changes
+  (with-redefs [io.github.getcolors.compute-node/compute-node!
+                (fn [& _] {:status "error" :error {:code "command_failed" :stage "apply"
+                  :command ["tofu" "apply"] :exit_code 1 :stderr "Provider request failed."
+                  :infrastructure_changes "possible"}})]
+    (let [message (:green/err (tools/infrastructure-step (assoc vt/base :green/event :create)))]
+      (is (str/includes? message "`tofu apply` exited with code 1"))
+      (is (str/includes? message "Infrastructure changes may have occurred."))
+      (is (not (str/includes? message "No infrastructure changes")))
+      (is (not (str/includes? message "direnv"))))))
+
+(deftest compute-inspection-preserves-state-error
+  (with-redefs [io.github.getcolors.compute-node/compute-node!
+                (fn [& _] {:status "error" :error {:code "state_unreadable" :stage "state"
+                  :message "Compute state could not be read." :infrastructure_changes "none"}})]
+    (let [message (:green/err (tools/load-infrastructure-step (assoc vt/base :green/event :delete)))]
+      (is (str/includes? message "Compute state could not be read."))
+      (is (not (str/includes? message "ownership"))))))
+
+(deftest unknown-compute-errors-never-expose-exception-or-claim-safety
+  (doseq [f [(fn [& _] {:status "error"})
+            (fn [& _] (throw (ex-info "secret-provider-response" {})))]]
+    (with-redefs [io.github.getcolors.compute-node/compute-node! f]
+      (let [message (:green/err (tools/infrastructure-step (assoc vt/base :green/event :create)))]
+        (is (= "Compute operation failed; no diagnostic details were returned." message))
+        (is (not (str/includes? message "secret-provider-response")))))))
+
+(deftest compute-missing-credential-names-the-variable
+  (with-redefs [io.github.getcolors.compute-node/compute-node!
+                (fn [& _] {:status "error" :error {:code "missing_credentials" :stage "credentials"
+                  :message "Required credentials are not set." :credential "COLORS_PAR_DO_TOKEN"
+                  :infrastructure_changes "none"}})]
+    (let [message (:green/err (tools/infrastructure-step (assoc vt/base :green/event :sync)))]
+      (is (str/includes? message "Stage: credentials"))
+      (is (str/includes? message "Required credential: COLORS_PAR_DO_TOKEN"))
+      (is (not (str/includes? message "direnv"))))))
+
+(deftest compute-cancellation-propagates
+  (with-redefs [io.github.getcolors.compute-node/compute-node!
+                (fn [& _] (throw (InterruptedException. "cancelled")))]
+    (doseq [step [tools/infrastructure-step tools/load-infrastructure-step]]
+      (is (thrown? InterruptedException (step (assoc vt/base :green/event :create)))))))

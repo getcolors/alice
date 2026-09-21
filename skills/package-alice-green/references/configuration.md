@@ -95,3 +95,16 @@ If Transmission is inactive, inspect its service status and journal over SSH.
 Use `./green tunnel 19091` and open
 `http://127.0.0.1:19091/transmission/web/` for private access. Do not manually edit
 generated files.
+
+## Compute diagnostics
+
+The package displays the compute library's safe failure details, including the
+stage, command, resolved executable, exit code, and sanitized stderr when
+available. An asdf shim with no selected OpenTofu version is a toolchain failure,
+not an ownership mismatch. Run the command through the deployment environment,
+for example `direnv exec . ./green sync`.
+
+A failure before apply reports that this operation made no infrastructure
+changes. Failure during or after apply reports that changes may have occurred;
+inspect node state before retrying. This does not imply that resources from an
+earlier run are absent. Diagnostic handling never retries apply automatically.
