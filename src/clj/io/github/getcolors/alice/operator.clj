@@ -3,17 +3,19 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [green.cli :as green-cli]
-            [green.process :as process]
+            [io.github.getcolors.alice.process :as process]
+            [io.github.getcolors.alice.access :as access]
+            [io.github.getcolors.alice.ssh :as ssh]
             [io.github.getcolors.alice.utils :as utils]
             [io.github.getcolors.alice.validate :as validate]))
 
 (defn command [opts local-port]
-  ["ssh" "-o" "IgnoreUnknown=UseKeychain"
+  (vec (concat ["ssh"] (ssh/direct-args opts) ["-o" "IgnoreUnknown=UseKeychain"
    "-F" (utils/ssh-config-path)
    "-o" "ExitOnForwardFailure=yes"
    "-N" "-L" (format "127.0.0.1:%d:127.0.0.1:%d"
                        local-port (or (:transmission-rpc-port opts) 9091))
-   "--" (utils/host-alias opts)])
+   "--" (utils/host-alias opts)])))
 
 (defn- parse-port [x default]
   (let [port (if x (parse-long (str x)) default)]
@@ -42,9 +44,12 @@
            (cond
              (seq errors) {:green/exit 2 :green/err (str/join "\n" errors)}
              (nil? local-port) {:green/exit 2 :green/err "local port must be from 1 to 65535"}
-             :else (let [{:keys [exit err]} (runner (command opts local-port))]
+             :else (access/scoped
+                     (fn []
+                       (let [ready (-> opts (assoc :green/event :tunnel) access/resource-step access/agent-step)
+                             {:keys [exit err]} (runner (command ready local-port))]
                      (cond-> {:green/exit (if (zero? exit) 0 (max 1 exit))}
                        (and (not (zero? exit)) (not-empty err))
-                       (assoc :green/err err)))))))
+                       (assoc :green/err err)))))))))
      (catch Throwable t
        {:green/exit 2 :green/err (or (ex-message t) (str (class t)))}))))

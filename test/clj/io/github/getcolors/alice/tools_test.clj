@@ -22,7 +22,7 @@
            (get-in parsed ["all" "hosts" "demo" "ansible_host"])))
     (is (= "root"
            (get-in parsed ["all" "hosts" "demo" "ansible_user"])))
-    (is (= "-o IdentitiesOnly=yes -o IdentityAgent=none"
+    (is (= "'-o' 'ControlMaster=no' '-o' 'ControlPersist=no' '-S' 'none'"
            (get-in parsed ["all" "hosts" "demo" "ansible_ssh_common_args"])))))
 
 (deftest keygen-inventory-names-the-machine-key
@@ -43,7 +43,7 @@
     ;; `AddKeysToAgent`, outliving the deleted file — exhaust `MaxAuthTries`
     ;; as `Too many authentication failures` before the named key is tried.
     ;; `IdentityAgent none` also keeps this run from banking another copy.
-    (is (= "-o IdentitiesOnly=yes -o IdentityAgent=none"
+    (is (= "'-i' '/home/op/.ssh/demo' '-o' 'IdentitiesOnly=yes' '-o' 'IdentityAgent=none' '-o' 'ForwardAgent=no' '-o' 'ControlMaster=no' '-o' 'ControlPersist=no' '-S' 'none'"
            (get-in parsed ["all" "hosts" "demo"
                            "ansible_ssh_common_args"])))))
 
@@ -66,7 +66,7 @@
         result (tools/acceptance-step opts)
         script (slurp (str (tools/tool-dir result tools/acceptance-tool)
                            "/acceptance.sh"))]
-    (is (str/includes? script "-fN -L"))
+    (is (str/includes? script "-N -L"))
     (is (str/includes? script
                        "127.0.0.1:${local_port}:127.0.0.1:${remote_port}"))
     (is (str/includes? script "/transmission/web/"))))
@@ -151,3 +151,28 @@
                 (fn [& _] (throw (InterruptedException. "cancelled")))]
     (doseq [step [tools/infrastructure-step tools/load-infrastructure-step]]
       (is (thrown? InterruptedException (step (assoc vt/base :green/event :create)))))))
+
+(deftest acceptance-timeout-stops-the-owned-foreground-tunnel
+  (let [dir (temp-dir)
+        bin (clojure.java.io/file dir "bin")
+        pid (clojure.java.io/file dir "tunnel.pid")
+        opts (assoc vt/base :workdir dir :profile "timeout" :green/event :build)]
+    (try
+      (.mkdirs bin)
+      (doseq [[name body]
+              [["ssh" "#!/bin/sh\ncase \"$*\" in\n *systemctl*) echo active; exit 0;;\n *' -O check '*) exit 0;;\nesac\necho $$ > \"$ALICE_TEST_TUNNEL_PID\"\nexec sleep 60\n"]
+               ["curl" "#!/bin/sh\nexec sleep 60\n"]]]
+        (let [file (clojure.java.io/file bin name)]
+          (spit file body) (.setExecutable file true)))
+      (tools/acceptance-step opts)
+      (let [result (green.process/run-with-timeout
+                    ["bash" (str (tools/tool-dir opts tools/acceptance-tool) "/acceptance.sh")]
+                    {:extra-env {"PATH" (str bin ":" (System/getenv "PATH"))
+                                 "ALICE_TEST_TUNNEL_PID" (str pid)}} 1000)]
+        (is (= 124 (:exit result)))
+        (is (.exists pid))
+        (when (.exists pid)
+          (let [child (str/trim (slurp pid))]
+            (is (not (zero? (:exit (green.process/run ["kill" "-0" child]))))))))
+      (finally
+        (doseq [file (reverse (file-seq (clojure.java.io/file dir)))] (.delete file))))))

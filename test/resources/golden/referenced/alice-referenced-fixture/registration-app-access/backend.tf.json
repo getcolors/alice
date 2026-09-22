@@ -1,0 +1,1 @@
+{"terraform":{"backend":{"s3":{"key":"alice-referenced-fixture/alice-ssh-registration.tfstate","use_lockfile":true,"bucket":"alice-state","region":"eu-west-1"}}}}

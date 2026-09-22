@@ -1,6 +1,8 @@
 (ns io.github.getcolors.alice.workflow
   "Alice lifecycle DAG, validation, and package-specific backend state key."
   (:require [green.dry-run :as dry-run]
+            [clojure.java.io :as io]
+            [io.github.getcolors.alice.access :as access]
             [green.lifecycle :as lifecycle]
             [green.progress :as progress]
             [green.workflow :as wf]
@@ -23,15 +25,7 @@
 
 (def credential-events #{:validate})
 
-(def create-like-events
-  "Events that bring a Droplet into existence, and therefore own the key's
-  creation. `sync` is here because alice's `sync` *is* the lifecycle: it
-  creates, downloads, and destroys in one event. The SSH Keypair Standard §3
-  bars a `sync` from touching key material because in every other package sync
-  is auxiliary and leaves the machine alone; alice's does not, and a key that
-  never appears cannot give a Droplet access. The DAG relabels the phases so
-  what actually runs is a create and a delete."
-  #{:create :sync})
+(def create-like-events #{:create :sync})
 
 (defn start-step
   ([opts] (start-step opts (System/getenv) validate/runtime-errors))
@@ -58,18 +52,14 @@
                (runtime-errors-fn opts)))]
           :after-validate
           (fn [opts _ {:keys [event real?]}]
-            (if (and real? (create-like-events event)) (ssh-config/preflight! opts)
-                (assoc (if real? opts (ssh/with-machine-key opts)) :green/exit 0)))}
+            (let [opts (cond-> opts (= :build event) (update :workdir #(str (io/file % "build"))))]
+              (if (and real? (create-like-events event)) (ssh-config/preflight! opts)
+                  (assoc (if real? opts (ssh/with-machine-key opts)) :green/exit 0))))}
     env)))
 
 (defn as-event
-  "Run `step` under a different `:green/event`, restoring the caller's event
-  on the way out.
-
-  This is what lets `sync` host a real delete. The key and config-block steps
-  gate on `:green/event`, per the standards, so a teardown that announced
-  itself as `:sync` would be skipped — `cleanup-step` would leave the keypair
-  behind on every ephemeral run."
+  "Run a sync teardown step under :delete, restoring the outer event afterward.
+  Application cleanup and compute guards require the explicit delete event."
   [event step]
   (fn [opts]
     (let [outer-event (:green/event opts)
@@ -84,31 +74,30 @@
   (case (:green/event run-opts)
     :delete
     (case step
-      ;; The `~/.ssh/config` block goes before the destroy, the keypair after
-      ;; it. A block that outlives its host is stale but harmless; a key that
-      ;; predeceases its host locks the operator out of a machine that still
-      ;; exists. Both orders are deliberate — standards/ssh-config.md §4 is
-      ;; explicit that they must not be tidied into agreement.
-      :alice/start [start-step :alice/load-infrastructure]
+      ;; Remove the owned alias before compute; retain the SSH authority.
+      :alice/start [start-step :alice/ssh-resource]
+      :alice/ssh-resource [access/resource-step :alice/load-infrastructure]
       :alice/load-infrastructure [tools/load-infrastructure-step :alice/ansible-local]
       :alice/ansible-local [tools/ansible-local-step :alice/infrastructure]
-      :alice/infrastructure [tools/infrastructure-step :alice/generated-cleanup]
+      :alice/infrastructure [tools/infrastructure-step :alice/registration-delete]
+      :alice/registration-delete [access/registration-delete-step :alice/generated-cleanup]
       :alice/generated-cleanup [tools/generated-cleanup-step])
 
-    ;; Alice's `sync` is the whole lifecycle in one event, so it carries both
-    ;; orderings above: the key is generated before the first provider call in
-    ;; `start`, and removed only once the destroy below has succeeded. The
-    ;; teardown steps run relabelled as `:delete` — `sync` has no key
-    ;; lifecycle of its own, it hosts a create and a delete.
+    ;; Sync authorizes teardown only after its final checksummed copy.
     :sync
     (case step
-      :alice/start [start-step :alice/infrastructure]
-      :alice/infrastructure [tools/infrastructure-step :alice/ansible-local]
+      :alice/start [start-step :alice/ssh-resource]
+      :alice/ssh-resource [access/resource-step :alice/registration :alice/agent]
+      :alice/registration [access/registration-step :alice/infrastructure]
+      :alice/agent [access/agent-step :alice/access-ready]
+      :alice/access-ready [access/join-step :alice/ansible-local]
+      :alice/infrastructure [tools/infrastructure-step :alice/access-ready]
       :alice/ansible-local [tools/ansible-local-step :alice/ansible-remote]
       :alice/ansible-remote [tools/ansible-remote-step :alice/sync]
       :alice/sync [sync/sync-step :alice/sync-ansible-local-delete]
       :alice/sync-ansible-local-delete [sync-local-delete-step :alice/sync-infrastructure-delete]
-      :alice/sync-infrastructure-delete [sync-infrastructure-delete-step :alice/sync-generated-cleanup]
+      :alice/sync-infrastructure-delete [sync-infrastructure-delete-step :alice/registration-delete]
+      :alice/registration-delete [access/registration-delete-step :alice/sync-generated-cleanup]
       :alice/sync-generated-cleanup [sync-generated-cleanup-step])
 
     :validate
@@ -117,19 +106,25 @@
 
     :describe
     (case step
-      :alice/start [start-step :alice/load-infrastructure]
+      :alice/start [start-step :alice/ssh-resource]
+      :alice/ssh-resource [access/resource-step :alice/agent]
+      :alice/agent [access/agent-step :alice/load-infrastructure]
       :alice/load-infrastructure [tools/load-infrastructure-step :alice/describe]
       :alice/describe [describe/describe-step])
 
     (case step
-      :alice/start [start-step :alice/infrastructure]
-      :alice/infrastructure [tools/infrastructure-step :alice/ansible-local]
+      :alice/start [start-step :alice/ssh-resource]
+      :alice/ssh-resource [access/resource-step :alice/registration :alice/agent]
+      :alice/registration [access/registration-step :alice/infrastructure]
+      :alice/agent [access/agent-step :alice/access-ready]
+      :alice/access-ready [access/join-step :alice/ansible-local]
+      :alice/infrastructure [tools/infrastructure-step :alice/access-ready]
       :alice/ansible-local [tools/ansible-local-step :alice/ansible-remote]
       :alice/ansible-remote [tools/ansible-remote-step :alice/acceptance]
       :alice/acceptance [tools/acceptance-step])))
 
 (def side-effecting-steps
-  [:alice/load-infrastructure :alice/infrastructure :alice/ansible-local :alice/ansible-remote
+  [:alice/ssh-resource :alice/registration :alice/agent :alice/registration-delete :alice/load-infrastructure :alice/infrastructure :alice/ansible-local :alice/ansible-remote
    :alice/acceptance :alice/sync :alice/sync-ansible-local-delete
    :alice/sync-infrastructure-delete
    :alice/sync-generated-cleanup
@@ -138,9 +133,8 @@
 (defn next-steps [step successors opts]
   (cond
     (wf/failed? opts) []
-    (:alice/already-destroyed opts)
-    (if (and (= :delete (:green/event opts)) (= :alice/load-infrastructure step))
-      [[:alice/generated-cleanup opts]] [])
+    (and (:alice/already-destroyed opts) (= :delete (:green/event opts)) (= :alice/load-infrastructure step))
+    [[:alice/registration-delete opts]]
     :else (mapv #(vector % opts) successors)))
 
 (def workflow

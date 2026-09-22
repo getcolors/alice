@@ -25,5 +25,9 @@
           :task (shell "./scripts/golden.sh")}
   golden:accept {:doc "Regenerate goldens after inspecting a fresh render"
                  :task (shell "./scripts/golden.sh" "--accept")}
+  pin:dependencies {:doc "Pin SDK and compute to clean pushed sibling main heads"
+                    :task (shell "python3" "scripts/pin-dependencies.py")}
+  pin:dependencies:test {:doc "Test dependency pin verification without network or edits"
+                         :task (shell "python3" "scripts/test-pin-dependencies.py")}
   pin {:doc "Stamp the launcher after a clean pushed commit"
        :task (load-file "tasks/pin.clj")}}}

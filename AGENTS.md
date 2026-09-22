@@ -29,11 +29,11 @@ Never run real create/delete without explicit authorization. Never edit or read
 Alice supplies one stable node identifier, `0`, and state filename
 `alice-node-0.tfstate` to colors-compute. The node is named `<profile>-0`.
 Alice owns application ordering: provisioning, SSH config, Ansible, downloads,
-checksummed copy, and teardown. The compute library owns the node and its key
+checksummed copy, and teardown. The compute library owns the node; separate SSH and registration APIs own key
 resources; it does not expand topology or orchestrate a deployment.
 
 OpenTofu runs in `<SDK workdir>/<profile>/0/` and uses its default `.terraform/`
-directory. Build renders templates there without provisioning. Templates,
+directory. Build renders separate previews under `<workdir>/build/<profile>/`. Templates,
 initialization files, and the node directory are never deleted by cleanup.
 The S3 state key is `<s3-prefix>/<profile>/alice-node-0.tfstate`; local state
 lives at `<SDK workdir>/<profile>/0/alice-node-0.tfstate`. An empty S3 prefix
@@ -52,44 +52,35 @@ absence discovers the region's default VPC. The library validates the reference,
 reads its CIDR, and asserts that default discovery really returned the account
 default. Alice never owns the VPC. Nothing discovered is written into desired state.
 
-## Node keys and SSH alias
+## SSH resources and agent sessions
 
-The node always owns its ED25519 keypair and DigitalOcean key registration.
-External SSH-key references and local-key adoption are unsupported.
+SSH uses the named encrypted `app-access` resource, independent of node `0`.
+Set `COLORS_PAR_ALICE_SSH_PASSPHRASE` at runtime. The resource inherits the
+workflow backend; local authority lives under the SDK workdir and profile,
+and R2 authority uses the configured bucket with a profile-containing path.
+No plaintext private key enters OpenTofu state or application files.
 
-For the local backend, the TLS keypair in local OpenTofu state is authoritative;
-there is no S3 dependency. For remote backends, the managed S3-compatible key
-objects are authoritative. GCS state requires separate `ssh-s3-bucket` and
-`ssh-s3-region` settings, optionally `ssh-s3-endpoint`. Local backends reject
-those remote-key settings.
+Create makes the encrypted authority durable, then runs provider registration
+and compute alongside a dedicated scoped SSH agent. Application steps join both
+branches. SSH, Ansible, acceptance, describe, tunnel, and sync explicitly select
+the public identity and the temporary agent socket; agent forwarding is disabled.
+The operator's agent is unchanged. Scope cleanup stops the owned agent on success
+or failure. The package still owns and validates its local SSH config block.
 
-Before application access, colors-compute overwrites `ssh-key` and `ssh-key.pub`
-in the node directory from the authoritative source, verifies the pair and its
-fingerprint, and applies private permissions. Existing copies are never uploaded
-or adopted. Missing state beside surviving local copies requires recovery.
-Unreadable state never proves resource absence. State and saved plans contain
-private material and must remain private.
-
-The package-owned `~/.ssh/config` play writes alias `<profile>` with the actual
-SDK key path, `IdentitiesOnly yes`, and `IdentityAgent none`. It validates
-ownership and serializes atomic updates because that config is shared with
-unrelated hosts. Do not replace it with an unreviewed library copy.
-
-Ansible uses `-F /dev/null`, so its inventory must independently include
-`ansible_ssh_private_key_file` from the library's normalized output and
-`ansible_ssh_common_args: -o IdentitiesOnly=yes -o IdentityAgent=none`.
-
-The old `# BEGIN alice <alias> ...` SSH marker remains recognized alongside
-the current alias-only marker. Retire recognition and removal together, never
-one without the other.
+Delete removes the alias, destroys compute, and deletes the separate provider
+registration. It retains the encrypted SSH resource. SSH resource destruction
+and passphrase rotation are separate explicit library operations. Changing the
+passphrase environment variable does not rotate the key. Missing authority or
+an incorrect secret fails closed. This is a greenfield API; existing deployments
+are not adopted or migrated automatically.
 
 ## Architecture and safety
 
-Create is `start -> infrastructure -> ansible-local -> ansible-remote ->
-acceptance`. Delete is `start -> load-infrastructure -> ansible-local ->
-infrastructure -> generated-cleanup`. Remove the SSH alias before destroying
-the node; remove key resources and working copies only after confirmed node
-destruction. A failed operation retains recovery material.
+Create is `start -> SSH resource -> [registration -> compute | agent] -> join ->
+ansible-local -> ansible-remote -> acceptance`. Delete is `start -> SSH inspection
+-> load-infrastructure -> ansible-local -> infrastructure -> registration-delete
+-> generated-cleanup`. Remove the SSH alias before destroying the node; remove
+the provider registration after destruction and retain the encrypted SSH resource.
 
 `sync` hosts a create and, only after all desired torrents finish and the final
 checksummed rsync succeeds, a delete. Its teardown stages remain relabelled with
@@ -151,3 +142,13 @@ paths already encode the repository. Never add one tag without the other.
 ## Git
 
 Work on the current branch. Do not commit or push unless explicitly authorized.
+
+Credential-free `build` renders all preview stages under `<workdir>/build/<profile>/`.
+Real lifecycle operations keep `<workdir>/<profile>/`. This isolates placeholder
+identities and generated previews from live templates, state, and encrypted SSH
+authority, so build remains safe after a deployment exists. Preview files are
+replaced on subsequent builds; they are never used to provision the deployment.
+
+For working-tree development, the launcher directly honors `ALICE_LIB_ROOT`,
+`GREEN_LIB_ROOT`, and `COLORS_COMPUTE_LIB_ROOT` (the latter points to the library's
+`green/` directory). No wrapper script is required.

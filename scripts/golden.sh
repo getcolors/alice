@@ -19,33 +19,33 @@ build() {
   if [ "$accept" = 1 ]; then
     rm -rf "$goldens/$variant"
     mkdir -p "$goldens/$variant"
-    cp -r "$tmp/$variant/." "$goldens/$variant/"
+    cp -r "$tmp/$variant/build/." "$goldens/$variant/"
     echo "  accepted — $variant"
   else
-    diff -qr "$goldens/$variant" "$tmp/$variant"
+    diff -qr "$goldens/$variant" "$tmp/$variant/build"
     echo "  ok — $variant"
   fi
 }
 
-# Each node owns its remote keypair; the third variant pins an existing VPC.
+# Compute consumes an explicit SSH identity; the third variant pins an existing VPC.
 build s3 "$state" COLORS_PAR_PROVIDER_BACKEND=s3 COLORS_PAR_S3_BUCKET=alice-state COLORS_PAR_S3_REGION=eu-west-1
 build r2 "$state"
 build referenced "$referenced" COLORS_PAR_PROVIDER_BACKEND=s3 COLORS_PAR_S3_BUCKET=alice-state COLORS_PAR_S3_REGION=eu-west-1
 
-base="$tmp/s3/alice-fixture"
+base="$tmp/s3/build/alice-fixture"
 for stage in 0 alice-ansible-local alice-ansible-remote alice-acceptance; do
   [ -d "$base/$stage" ] || { echo "golden: missing stage $stage" >&2; exit 1; }
 done
 
 python3 "$root/scripts/compute-contract.py" "$base/0" discovered s3
-python3 "$root/scripts/compute-contract.py" "$tmp/r2/alice-fixture/0" discovered r2
-python3 "$root/scripts/compute-contract.py" "$tmp/referenced/alice-referenced-fixture/0" referenced s3
+python3 "$root/scripts/compute-contract.py" "$tmp/r2/build/alice-fixture/0" discovered r2
+python3 "$root/scripts/compute-contract.py" "$tmp/referenced/build/alice-referenced-fixture/0" referenced s3
 local_play="$base/alice-ansible-local/main.yml"
 grep -q 'colors_keygen: true' "$local_play"
 grep -q 'IdentityAgent none' "$local_play"
 grep -q 'fcntl.flock' "$local_play"
 grep -q 'os.replace' "$local_play"
-grep -q 'colors_keygen: true' "$tmp/referenced/alice-referenced-fixture/alice-ansible-local/main.yml"
+grep -q 'colors_keygen: true' "$tmp/referenced/build/alice-referenced-fixture/alice-ansible-local/main.yml"
 
 # A build that reached the real ~/.ssh would leak the operator's home into
 # committed bytes and make the goldens workstation-specific.
@@ -57,14 +57,14 @@ fi
 # SSH Config Standard §6: the local stage takes the address, the user and the
 # alias as extra-vars, never through Selmer, so its rendered playbook carries no
 # address at all. A dotted quad here means a run-time fact was templated.
-for variant_base in "$tmp"/*/*; do
+for variant_base in "$tmp"/*/build/*; do
   if grep -rEq '([0-9]{1,3}\.){3}[0-9]{1,3}' "$variant_base/alice-ansible-local"; then
     echo "golden: $variant_base rendered an address into the local ssh_config stage" >&2
     exit 1
   fi
 done
 grep -q 'alice-fixture/alice-node-0.tfstate' \
-  "$tmp/r2/alice-fixture/0/backend.tf.json"
+  "$tmp/r2/build/alice-fixture/0/backend.tf.json"
 
 play="$base/alice-ansible-remote/main.yml"
 grep -q 'transmission-daemon' "$play"

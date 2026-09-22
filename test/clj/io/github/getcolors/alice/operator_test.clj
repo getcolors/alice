@@ -1,7 +1,8 @@
 (ns io.github.getcolors.alice.operator-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
-            [io.github.getcolors.alice.operator :as operator]))
+            [io.github.getcolors.alice.operator :as operator]
+            [io.github.getcolors.alice.access :as access]))
 
 (defn- temp-dir []
   (let [f (java.io.File/createTempFile "alice-test-" "")]
@@ -19,10 +20,11 @@
   (let [file (str (temp-dir) "/colors.yml")
         called (atom nil)]
     (spit file "profile: demo\ntransmission-rpc-port: 9091\n")
+    (with-redefs [access/resource-step identity access/agent-step identity]
     (let [result (operator/run file ["18080"]
                                (fn [args] (reset! called args) {:exit 0}) {})]
       (is (= 0 (:green/exit result)))
-      (is (some #{"127.0.0.1:18080:127.0.0.1:9091"} @called)))))
+      (is (some #{"127.0.0.1:18080:127.0.0.1:9091"} @called))))))
 
 (deftest run-refuses-profile-overlay-and-invalid-port
   (let [file (str (temp-dir) "/colors.yml")]

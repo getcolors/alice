@@ -1,9 +1,9 @@
 {:paths ["src/clj" "src/resources"]
  :deps {org.clojure/clojure       {:mvn/version "1.12.5"}
         io.github.getcolors/green {:git/url "https://github.com/getcolors/green.git"
-                                   :git/sha "3f33f5d4dcce1f8d97a11b6972e13eb3f0b37654"}
+                                   :git/sha "7f1f94463ac7914598db419ac221546fb7e3cbec"}
         io.github.getcolors/colors-compute  {:git/url "https://github.com/getcolors/colors-compute.git"
-                                   :git/sha "520e5d3deb6327ce4641b4905a838eb27b8a87a2"
+                                   :git/sha "2f0e95fb3ed7acc438718b1b8ead119630e0d839"
                                    :deps/root "green"}}
  :aliases {:dev {:extra-paths ["test/clj" "test/resources"]}
            :test {:extra-paths ["test/clj" "test/resources"]

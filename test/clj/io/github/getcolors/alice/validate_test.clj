@@ -59,3 +59,15 @@
                   (fn [argv _] (swap! commands conj (last argv)) {:exit 0}))))
     (is (not (some #{"aws"} @commands)))
     (is (some #{"tofu"} @commands))))
+
+(deftest python-pty-support-is-checked-without-provisioning
+  (let [errors (validate/runtime-errors (assoc base :provider-backend "local")
+                 (fn [args _] {:exit (if (= "python3" (first args)) 1 0)}))]
+    (is (= ["python3 must support POSIX fcntl, termios and PTY allocation for encrypted OpenSSH generation"] errors))))
+
+(deftest compute-deletion-needs-provider-credentials-but-no-passphrase
+  (let [opts (assoc base :provider-backend "local" :green/event :delete)]
+    (is (empty? (validate/secret-errors opts {"COLORS_PAR_DO_TOKEN" "test-token"})))
+    (is (some #(str/includes? % "COLORS_PAR_DO_TOKEN") (validate/secret-errors opts {})))
+    (is (some #(str/includes? % "COLORS_PAR_ALICE_SSH_PASSPHRASE")
+              (validate/secret-errors (assoc opts :green/event :create) {"COLORS_PAR_DO_TOKEN" "test-token"})))))

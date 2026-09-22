@@ -3,7 +3,9 @@
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [green.process :as process]
+            [io.github.getcolors.alice.process :as process]
+            [io.github.getcolors.alice.ssh :as ssh]
+            [io.github.getcolors.alice.access :as access]
             [io.github.getcolors.alice.utils :as utils]))
 
 (def remote-download-directory "/var/lib/transmission-daemon/downloads")
@@ -46,14 +48,15 @@
    (cond-> ["rsync" "-a" "--partial"]
      checksum? (conj "--checksum")
      true (into ["-e" (str "ssh -o IgnoreUnknown=UseKeychain -F "
-                            (process/posix-quote (utils/ssh-config-path)))
+                            (process/posix-quote (utils/ssh-config-path)) " "
+                            (str/join " " (map process/posix-quote (ssh/direct-args opts))))
                  (str (utils/host-alias opts) ":" remote-download-directory "/")
                  (str destination "/")]))))
 
 (defn- ssh-command [opts & remote-args]
-  (into ["ssh" "-o" "IgnoreUnknown=UseKeychain"
+  (into (into ["ssh" "-o" "IgnoreUnknown=UseKeychain"
          "-F" (utils/ssh-config-path)
-         "--" (utils/host-alias opts)]
+          ] (concat (ssh/direct-args opts) ["--" (utils/host-alias opts)]))
         remote-args))
 
 (defn- fail! [label {:keys [exit out err]}]
@@ -74,7 +77,7 @@
 (defn tunnel-start-command [opts control-path]
   (let [local-port (:transmission-tunnel-local-port opts)
         remote-port (:transmission-rpc-port opts)]
-    ["ssh" "-o" "IgnoreUnknown=UseKeychain"
+    (vec (concat ["ssh"] (ssh/identity-args opts) ["-o" "IgnoreUnknown=UseKeychain"
      "-F" (utils/ssh-config-path)
      "-o" "BatchMode=yes"
      "-o" "ExitOnForwardFailure=yes"
@@ -82,7 +85,7 @@
      "-o" (str "ControlPath=" control-path)
      "-o" "ControlPersist=no"
      "-fN" "-L" (format "127.0.0.1:%d:127.0.0.1:%d" local-port remote-port)
-     "--" (utils/host-alias opts)]))
+     "--" (utils/host-alias opts)]))))
 
 (defn tunnel-stop-command [opts control-path]
   ["ssh" "-o" "IgnoreUnknown=UseKeychain"
@@ -191,9 +194,10 @@
                          (process/run (tunnel-stop-command opts control-path))))
         shutdown-hook (Thread. ^Runnable stop-tunnel!)]
     (.mkdirs (io/file destination))
-    (run-checked! "SSH tunnel" (tunnel-start-command opts control-path))
+    (when access/*register!* (access/*register!* :process stop-tunnel!))
     (.addShutdownHook (Runtime/getRuntime) shutdown-hook)
     (try
+      (run-checked! "SSH tunnel" (tunnel-start-command opts control-path))
       (println (format "Transmission UI: http://127.0.0.1:%d/transmission/web/"
                        (:transmission-tunnel-local-port opts)))
       (flush)

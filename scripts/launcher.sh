@@ -30,9 +30,9 @@ fi
 mkdir "$tmp/project"
 cp "$launcher" "$tmp/project/green"; chmod +x "$tmp/project/green"
 cp "$root/test/fixtures/colors.yml" "$tmp/project/colors.yml"
-(cd "$tmp/project" && ALICE_LIB_ROOT="$root" "$root/scripts/run-green.sh" ./green build >/dev/null) || fail 'ALICE_LIB_ROOT build failed'
-[ -f "$tmp/project/.colors/alice-fixture/0/compute.tf.json" ] || fail 'copied payload rendered nothing'
-ok 'working-tree override renders from a copied payload'
+(cd "$tmp/project" && ALICE_LIB_ROOT="$root" ./green build >/dev/null) || fail 'ALICE_LIB_ROOT build failed'
+[ -f "$tmp/project/.colors/build/alice-fixture/0/compute.tf.json" ] || fail 'copied payload rendered nothing'
+ok 'direct working-tree overrides render from a copied payload'
 mkdir -p "$tmp/project/deep/path"
 (cd "$tmp/project/deep/path" && ALICE_LIB_ROOT="$root" "$root/scripts/run-green.sh" ../../green build >/dev/null) || fail 'upward desired-state search failed'
 ok 'finds colors.yml by walking upward'

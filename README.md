@@ -57,18 +57,25 @@ state filename `alice-node-0.tfstate`. Alice supplies the firewall policy and
 orders provisioning, Ansible, download verification, and destruction. The
 Droplet is named `<profile>-0`.
 
-OpenTofu runs in `<workdir>/<profile>/0/`. Templates and `.terraform/` remain
-after deletion. SSH keys belong to the node: local state is authoritative for
-the local backend; remote backends use authoritative S3 key objects. Access
-files are refreshed from that authority before application access. The
-package-owned SSH config block points to that SDK copy.
+SSH uses the named encrypted `app-access` resource, independent of node `0`.
+Set `COLORS_PAR_ALICE_SSH_PASSPHRASE` at runtime. The resource inherits the
+workflow backend; local authority lives under the SDK workdir and profile,
+and R2 authority uses the configured bucket with a profile-containing path.
+No plaintext private key enters OpenTofu state or application files.
 
-S3/R2 store state under `<s3-prefix>/<profile>/alice-node-0.tfstate`. A local
-backend stores state and authoritative keys in the node directory, with no S3
-requirement. See the configuration reference for remote-backend credentials.
+Create makes the encrypted authority durable, then runs provider registration
+and compute alongside a dedicated scoped SSH agent. Application steps join both
+branches. SSH, Ansible, acceptance, describe, tunnel, and sync explicitly select
+the public identity and the temporary agent socket; agent forwarding is disabled.
+The operator's agent is unchanged. Scope cleanup stops the owned agent on success
+or failure. The package still owns and validates its local SSH config block.
 
-Existing monolithic or shared/node state requires explicit migration. This
-adapter does not adopt old keys, registrations, or cloud resources automatically.
+Delete removes the alias, destroys compute, and deletes the separate provider
+registration. It retains the encrypted SSH resource. SSH resource destruction
+and passphrase rotation are separate explicit library operations. Changing the
+passphrase environment variable does not rotate the key. Missing authority or
+an incorrect secret fails closed. This is a greenfield API; existing deployments
+are not adopted or migrated automatically.
 
 For working-tree dependency tests:
 
@@ -88,3 +95,20 @@ version reports the toolchain failure and suggests `direnv exec . ./green sync`
 when running sync. State-read failures and identity mismatches remain distinct.
 Only failures before apply say no infrastructure changes were made by that
 operation; failures during or after apply advise inspecting state before retry.
+
+Credential-free `build` renders all preview stages under `<workdir>/build/<profile>/`.
+Real lifecycle operations keep `<workdir>/<profile>/`. This isolates placeholder
+identities and generated previews from live templates, state, and encrypted SSH
+authority, so build remains safe after a deployment exists. Preview files are
+replaced on subsequent builds; they are never used to provision the deployment.
+
+For working-tree development, the launcher directly honors `ALICE_LIB_ROOT`,
+`GREEN_LIB_ROOT`, and `COLORS_COMPUTE_LIB_ROOT` (the latter points to the library's
+`green/` directory). No wrapper script is required.
+
+Update dependency pins with `bb pin:dependencies` after committing and pushing
+both sibling `green` and `colors-compute` repositories. The task verifies each
+checkout is clean, on `main`, uses the expected origin, and matches the current
+remote `main` SHA before changing either dependency. It preserves the rest of
+`deps.edn`; `bb pin:dependencies:test` checks the refusal paths offline. After
+Alice itself is committed and pushed, `bb pin` stamps its launcher separately.

@@ -2,7 +2,8 @@
   "Non-mutating local SSH and Transmission status reporting."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [green.process :as process]
+            [io.github.getcolors.alice.process :as process]
+            [io.github.getcolors.alice.ssh :as ssh]
             [io.github.getcolors.alice.utils :as utils]
             [io.github.getcolors.alice.validate :as validate]))
 
@@ -31,16 +32,16 @@
    (let [alias (utils/host-alias opts)
          block (host-block (or (read-config) "") alias)
          ssh-result (when block
-                      (runner ["ssh" "-o" "IgnoreUnknown=UseKeychain"
+                      (runner (into ["ssh"] (concat (ssh/direct-args opts) [ "-o" "IgnoreUnknown=UseKeychain"
                                "-F" (utils/ssh-config-path)
                                "-o" "BatchMode=yes" "-o" "ConnectTimeout=5"
-                               "--" alias "true"]))
+                               "--" alias "true"]))))
          reachable? (and ssh-result (zero? (:exit ssh-result)))
          service-result (when reachable?
-                          (runner ["ssh" "-o" "IgnoreUnknown=UseKeychain"
+                          (runner (into ["ssh"] (concat (ssh/direct-args opts) [ "-o" "IgnoreUnknown=UseKeychain"
                                    "-F" (utils/ssh-config-path)
                                    "--" alias "systemctl" "is-active"
-                                   "transmission-daemon"]))
+                                   "transmission-daemon"]))))
          service (some-> (:out service-result) str/trim)]
      {:profile (:profile opts)
       ;; The effective name, not the override key: describe should say what the

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert Alice's single-root compute and authoritative remote-key contract."""
+"""Assert Alice's single-root compute and public-identity compute contract."""
 import json
 from pathlib import Path
 import sys
@@ -8,12 +8,10 @@ node = json.loads((root / 'compute.tf.json').read_text())
 resources = node['resource']
 assert resources['digitalocean_droplet']['node']['lifecycle']['prevent_destroy'] is True
 assert resources['digitalocean_droplet']['node']['name'].endswith('-0')
-assert resources['tls_private_key']['machine']['algorithm'] == 'ED25519'
-assert set(resources['aws_s3_object']) == {'ssh_private', 'ssh_public'}
-for name in ('ssh_private', 'ssh_public'):
-    assert resources['aws_s3_object'][name]['provider'] == 'aws.keys'
-    assert resources['aws_s3_object'][name]['force_destroy'] is False
-assert 'aws_s3_object.ssh_private' in resources['digitalocean_droplet']['node']['depends_on']
+assert 'tls_private_key' not in resources
+assert 'aws_s3_object' not in resources
+assert 'digitalocean_ssh_key' not in resources
+assert 'ssh_identity_file' not in node['output']['params']['value']
 assert node['output']['params']['value']['node_id'] == '0'
 vpc = node['data']['digitalocean_vpc']['network']
 if network == 'discovered':
@@ -27,4 +25,4 @@ config = json.loads((root / 'backend.tf.json').read_text())['terraform']['backen
 assert config['key'].endswith('/alice-node-0.tfstate')
 assert not ({'access_key', 'secret_key', 'token'} & config.keys())
 assert ('endpoints' in config) == (backend == 'r2')
-print('Alice single-node remote-key contract: passed')
+print('Alice single-node public-identity contract: passed')

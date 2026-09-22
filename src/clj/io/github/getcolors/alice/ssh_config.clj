@@ -21,7 +21,7 @@
   (or (not-empty (str (:profile opts))) "alice"))
 
 (defn identity-file
-  "The authoritative remote key's local SDK copy, supplied by colors-compute."
+  "The scoped agent's public identity file, supplied by colors-compute."
   [opts]
   (or (:ssh-private-key-path opts)
       (throw (ex-info "compute SSH identity unavailable" {}))))

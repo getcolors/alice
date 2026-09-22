@@ -1,5 +1,5 @@
 (ns io.github.getcolors.alice.sync-test
-  (:require [green.process]
+  (:require [io.github.getcolors.alice.process]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [io.github.getcolors.alice.sync :as sync]))
@@ -52,16 +52,16 @@
               :transmission-rpc-port 9091 :transmission-tunnel-local-port 19091}]
     (try
       (with-redefs [sync/rpc-call (fn [& _] {:torrents []})
-                    green.process/run (fn [argv & _] (swap! calls conj argv) {:exit 0})
-                    green.process/run-inherit (fn [argv] (swap! calls conj argv) {:exit 0})]
+                    io.github.getcolors.alice.process/run (fn [argv & _] (swap! calls conj argv) {:exit 0})
+                    io.github.getcolors.alice.process/run-inherit (fn [argv] (swap! calls conj argv) {:exit 0})]
         (is (= 0 (:green/exit (sync/sync-step opts)))))
       (let [commands @calls stop (first (keep-indexed #(when (some #{"transmission-daemon"} %2) %1) commands))
             copy (first (keep-indexed #(when (= "rsync" (first %2)) %1) commands))]
         (is (< stop copy))
         (is (some #{"--checksum"} (nth commands copy))))
       (with-redefs [sync/rpc-call (fn [& _] {:torrents []})
-                    green.process/run (fn [& _] {:exit 0})
-                    green.process/run-inherit (fn [_] {:exit 1 :err "checksum failed"})]
+                    io.github.getcolors.alice.process/run (fn [& _] {:exit 0})
+                    io.github.getcolors.alice.process/run-inherit (fn [_] {:exit 1 :err "checksum failed"})]
         (is (thrown? Exception (sync/sync-step opts))))
       (finally (.delete directory)))))
 
@@ -77,3 +77,24 @@
     (is (nil? (sync/magnet-info-hash nil)))
     (is (= hash (sync/magnet-info-hash (str "magnet:?xt=urn:btih:" hash "&xt=urn%3Abtih%3A" hash))))
     (is (nil? (sync/magnet-info-hash (str "magnet:?xt=urn:btih:" hash "&xt=urn:btih:306d9b5251c2209a723675fbdd60a87072dba2bb"))))))
+
+(deftest tunnel-startup-failure-still-attempts-owned-control-cleanup
+  (let [calls (atom [])]
+    (with-redefs [io.github.getcolors.alice.process/run
+                  (fn [args & _]
+                    (swap! calls conj args)
+                    (if (some #{"-fN"} args) {:exit 130 :err "interrupted"} {:exit 0}))]
+      (is (thrown? Exception
+                   (sync/sync-step {:profile "test" :transmission-local-directory "/tmp/alice-sync-cleanup-test"
+                                    :transmission-tunnel-local-port 19091 :transmission-rpc-port 9091})))
+      (is (some #(some #{"exit"} %) @calls)))))
+
+(deftest sync-only-reuses-its-explicitly-owned-tunnel
+  (let [opts {:profile "test" :transmission-tunnel-local-port 19091 :transmission-rpc-port 9091}
+        command (sync/tunnel-start-command opts "/owned/control.sock")
+        copy (sync/rsync-command opts "/downloads")]
+    (is (some #{"ControlMaster=yes"} command))
+    (is (some #{"ControlPath=/owned/control.sock"} command))
+    (is (not (some #{"none"} command)))
+    (is (str/includes? (nth copy 4) "ControlMaster=no"))
+    (is (str/includes? (nth copy 4) "'-S' 'none'"))))

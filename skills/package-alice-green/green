@@ -23,6 +23,7 @@
 
 (def ^:private alice-git-url "https://github.com/getcolors/alice.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
+(def ^:private compute-git-url "https://github.com/getcolors/colors-compute.git")
 
 (defn- lib-coord [env-var url sha deps-root]
   (if-let [root (System/getenv env-var)]
@@ -35,17 +36,21 @@
   (some? (io/resource "io/github/getcolors/alice/tools.clj")))
 
 (def ^:private bootstrap-error
-  (when (and (System/getProperty "babashka.version") (not resolved?))
+  (when (and (System/getProperty "babashka.version")
+             (or (not resolved?) (some #(System/getenv %) ["ALICE_LIB_ROOT" "GREEN_LIB_ROOT" "COLORS_COMPUTE_LIB_ROOT"])))
     (let [alice (lib-coord "ALICE_LIB_ROOT" alice-git-url alice-sha nil)
-          green (lib-coord "GREEN_LIB_ROOT" green-git-url nil nil)]
-      (if-not alice
+          green (lib-coord "GREEN_LIB_ROOT" green-git-url nil nil)
+          compute (lib-coord "COLORS_COMPUTE_LIB_ROOT" compute-git-url nil "green")]
+      (if (and (not resolved?) (not alice))
         (str "this launcher carries no alice pin.\n"
              "It has not been stamped by `bb pin`, which cannot run until the "
              "alice repository has been pushed.\n"
              "Point it at a checkout meanwhile: ALICE_LIB_ROOT=/path/to/alice")
         (do ((requiring-resolve 'babashka.deps/add-deps)
-             {:deps (cond-> {'io.github.getcolors/alice alice}
-                      green (assoc 'io.github.getcolors/green green))})
+             {:deps (cond-> {}
+                      (or (not resolved?) (System/getenv "ALICE_LIB_ROOT")) (assoc 'io.github.getcolors/alice alice)
+                      green (assoc 'io.github.getcolors/green green)
+                      compute (assoc 'io.github.getcolors/colors-compute compute))})
             nil)))))
 
 (def ^:private load-error
@@ -118,9 +123,10 @@
 
       (contains? lifecycle-commands command)
       (or (contract-error)
-          ((requiring-resolve 'green.cli/run-cli)
-           @(requiring-resolve 'io.github.getcolors.alice.workflow/workflow)
-           (default-args args)))
+          ((requiring-resolve 'io.github.getcolors.alice.access/scoped)
+           (fn [] ((requiring-resolve 'green.cli/run-cli)
+                   @(requiring-resolve 'io.github.getcolors.alice.workflow/workflow)
+                   (default-args args)))))
 
       (= "tunnel" command)
       (or (contract-error)

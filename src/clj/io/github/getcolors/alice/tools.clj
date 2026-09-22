@@ -4,10 +4,11 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [green.ansible :as ansible]
-            [green.process :as process]
+            [io.github.getcolors.alice.process :as process]
             [green.scaffold :as sc]
             [green.workflow :as wf]
             [io.github.getcolors.alice.ssh-config :as ssh-config]
+            [io.github.getcolors.alice.ssh :as ssh]
             [io.github.getcolors.alice.compute :as compute]
             [io.github.getcolors.alice.compute-error :as compute-error]
             [io.github.getcolors.compute-node :as library]
@@ -62,7 +63,7 @@
 (defn load-infrastructure-step [opts]
   (try
     (let [result (library/compute-node! (compute/library-options opts) (compute/request opts)
-                                       (if (= :delete (:green/event opts)) "inspect" "prepare-access"))]
+                                       "inspect")]
       (case (:status result)
         "ready" (with-node opts (:params result))
         "destroyed" (if (= :delete (:green/event opts))
@@ -74,7 +75,7 @@
 
 (defn data-fn [opts]
   (let [node (compute/node opts)]
-    (cond-> (merge opts {:host-alias (utils/host-alias opts) :ip (:ip node) :user (:user node)})
+    (cond-> (merge opts {:host-alias (utils/host-alias opts) :agent-socket (:alice/agent-socket opts) :ip (:ip node) :user (:user node)})
       (:ssh_identity_file node) (assoc :ssh-private-key-path (:ssh_identity_file node)))))
 
 (defn inventory [opts]
@@ -82,7 +83,7 @@
     (json/generate-string
       {:all {:hosts {host-alias (cond-> {:ansible_host ip :ansible_user user}
                                  ssh-private-key-path (assoc :ansible_ssh_private_key_file ssh-private-key-path)
-                                 (validate/keygen? opts) (assoc :ansible_ssh_common_args "-o IdentitiesOnly=yes -o IdentityAgent=none"))}}}
+                                 (validate/keygen? opts) (assoc :ansible_ssh_common_args (str/join " " (map process/posix-quote (ssh/direct-args opts)))))}}}
       {:pretty true})))
 
 (defn ansible-local-specs [opts]

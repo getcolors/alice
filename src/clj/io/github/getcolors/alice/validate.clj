@@ -2,7 +2,7 @@
   "Desired-state, credential, tool, and DigitalOcean validation."
   (:require [clojure.string :as str]
             [green.cli :as green-cli]
-            [green.process :as process]
+            [io.github.getcolors.alice.process :as process]
             [io.github.getcolors.alice.sync :as sync]
             [io.github.getcolors.compute :as library]
             [io.github.getcolors.alice.compute :as compute]))
@@ -14,7 +14,7 @@
   "Apply parameter overlays while silently ignoring the retired environment
   destruction override."
   [opts env]
-  (green-cli/read-pars opts (dissoc (into {} env) prevent-destroy-par)))
+  (dissoc (green-cli/read-pars opts (dissoc (into {} env) prevent-destroy-par "COLORS_PAR_ALICE_SSH_PASSPHRASE")) :alice-ssh-passphrase))
 
 (defn placeholder? [x]
   (or (nil? x)
@@ -84,14 +84,17 @@
       [":transmission-magnet-links must have unique BTIH hashes"])
     (try (compute/plan opts) [] (catch Exception e [(ex-message e)])))))
 
-(defn secret-errors [opts]
-  (let [env (System/getenv)]
-    (for [variable (library/credential-requirements opts)
-          :let [key (keyword (str/replace (str/lower-case (subs variable 11)) "_" "-"))]
-          :when (placeholder? (or (get opts key) (get env variable)))]
-      (str "required credential is not set: " variable))))
+(defn secret-errors
+  ([opts] (secret-errors opts (System/getenv)))
+  ([opts env]
+   (let [required (cond-> (vec (library/credential-requirements opts))
+                    (not= :delete (:green/event opts)) (conj "COLORS_PAR_ALICE_SSH_PASSPHRASE"))]
+     (for [variable required
+           :let [key (keyword (str/replace (str/lower-case (subs variable 11)) "_" "-"))]
+           :when (placeholder? (or (get opts key) (get env variable)))]
+       (str "required credential is not set: " variable)))))
 
-(def required-tools ["tofu" "aws" "ssh-keygen" "ansible-playbook" "ssh" "curl" "rsync"])
+(def required-tools ["python3" "tofu" "aws" "ssh-keygen" "ssh-agent" "ssh-add" "ansible-playbook" "ssh" "curl" "rsync"])
 
 (defn- command-present? [runner command]
   (zero? (:exit (runner ["sh" "-c" "command -v \"$1\" >/dev/null 2>&1" "sh" command] {}))))
@@ -99,5 +102,10 @@
 (defn runtime-errors
   ([opts] (runtime-errors opts process/run))
   ([opts runner]
-   (vec (for [tool (if (= "local" (:provider-backend opts)) (remove #{"aws"} required-tools) required-tools) :when (not (command-present? runner tool))]
-          (str "required tool is not on PATH: " tool)))))
+   (let [required (if (= "local" (:provider-backend opts)) (remove #{"aws"} required-tools) required-tools)
+         missing (vec (remove #(command-present? runner %) required))
+         python-check (when-not (some #{"python3"} missing)
+                        (runner ["python3" "-c" "import fcntl, os, pty, termios; a,b=pty.openpty(); os.close(a); os.close(b)"] {}))]
+     (cond-> (mapv #(str "required tool is not on PATH: " %) missing)
+       (and python-check (not (zero? (:exit python-check))))
+       (conj "python3 must support POSIX fcntl, termios and PTY allocation for encrypted OpenSSH generation")))))
