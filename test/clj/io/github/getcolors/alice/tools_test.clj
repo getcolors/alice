@@ -176,3 +176,38 @@
             (is (not (zero? (:exit (green.process/run ["kill" "-0" child]))))))))
       (finally
         (doseq [file (reverse (file-seq (clojure.java.io/file dir)))] (.delete file))))))
+
+(deftest rejected-digitalocean-token-has-specific-recovery
+  (doseq [[stage changes event] [["plan" "none" :sync]
+                                 ["apply" "possible" :create]
+                                 ["destroy" "possible" :delete]]]
+    (with-redefs [io.github.getcolors.compute-node/compute-node!
+                  (fn [& _] {:status "error"
+                             :error {:code "command_failed" :stage stage
+                                     :message "Required command failed."
+                                     :command ["tofu" stage] :exit_code 1
+                                     :stderr "GET https://api.digitalocean.com/v2/vpcs: 401 (request id omitted) Unable to authenticate you"
+                                     :auth_reason "digitalocean_token_rejected"
+                                     :infrastructure_changes changes}})]
+      (let [result (tools/infrastructure-step (assoc vt/base :green/event event))
+            message (:green/err result)]
+        (is (= 1 (:green/exit result)))
+        (is (str/starts-with? message "DigitalOcean rejected COLORS_PAR_DO_TOKEN (HTTP 401 Unauthorized)."))
+        (is (str/includes? message (str "Stage: " stage)))
+        (is (str/includes? message (str "`tofu " stage "` exited with code 1")))
+        (is (str/includes? message "ignored .envrc.private"))
+        (is (str/includes? message (str "direnv exec . ./green " (name event))))
+        (is (= (= changes "none") (str/includes? message "No infrastructure changes were made")))
+        (is (= (= changes "possible") (str/includes? message "Infrastructure changes may have occurred")))))))
+
+(deftest unclassified-provider-failure-does-not-invent-token-recovery
+  (with-redefs [io.github.getcolors.compute-node/compute-node!
+                (fn [& _] {:status "error"
+                           :error {:code "command_failed" :stage "init"
+                                   :command ["tofu" "init"] :exit_code 1
+                                   :stderr "Backend request failed: 401 Unauthorized"
+                                   :infrastructure_changes "none"}})]
+    (let [message (:green/err (tools/infrastructure-step (assoc vt/base :green/event :sync)))]
+      (is (str/includes? message "Backend request failed: 401 Unauthorized"))
+      (is (not (str/includes? message "COLORS_PAR_DO_TOKEN")))
+      (is (not (str/includes? message ".envrc.private"))))))
