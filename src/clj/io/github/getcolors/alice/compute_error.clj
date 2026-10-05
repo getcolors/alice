@@ -1,7 +1,27 @@
 (ns io.github.getcolors.alice.compute-error
   "Present sanitized library failures with package-specific recovery advice."
   (:require [clojure.string :as str]
-            [io.github.getcolors.alice.compute :as compute]))
+            [io.github.getcolors.alice.compute :as compute]
+            [io.github.getcolors.compute-ssh :as ssh]))
+
+(defn missing-ssh-authority [opts existing-consumer?]
+  (let [{:keys [storage object_key]} (ssh/ssh-plan (compute/library-options opts)
+                                                                (compute/ssh-request opts))
+        local? (= "local" (:kind storage))
+        location (if local? (:path storage) (str (:bucket storage) "/" object_key))
+        runtime (str (compute/sdk-workdir opts) "/" (:profile opts))]
+    (str/join "\n\n"
+      (remove nil?
+        ["Cannot load the existing SSH identity \"app-access\"."
+         (str "Missing " (if local? "local file" (str (str/upper-case (:kind storage)) " object")) ":\n  " location)
+         (if existing-consumer?
+           "Local files indicate a previous deployment, so Alice stopped rather than generate a replacement identity."
+           "This command requires an existing identity. Alice stopped rather than generate a replacement identity.")
+         "If this deployment should still exist, restore the encrypted identity from backup."
+         (str "If you intentionally removed the stored identity to start over, first verify that the Droplet and provider SSH-key registration are absent. Then archive the old local runtime directory (preserving it for recovery):\n  " runtime
+              "\nAfter both checks, retry your intended create or sync command.")
+         (when (#{:create :sync} (:green/event opts))
+           "No infrastructure was created by this attempt.")]))))
 
 (defn- command-label [command]
   (when (and (vector? command) (seq command)

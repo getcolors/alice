@@ -81,6 +81,13 @@ An empty magnet list completes immediately after one copy. Use `create` plus
 State read failures never mean absence. Missing encrypted authority requires
 explicit recovery. A retry preserves the same public identity.
 
+When the encrypted identity is missing, Alice identifies its storage location.
+Restore it from backup if the deployment should still exist. An intentional
+fresh start requires verifying that both the Droplet and provider SSH-key
+registration are absent, then archiving the old local runtime directory before
+retrying create or sync. Emptying the state bucket alone does not remove cloud
+resources. Alice never generates a replacement identity for an existing consumer.
+
 If Transmission is inactive, inspect its service status and journal over SSH.
 Use `./green tunnel 19091` and open
 `http://127.0.0.1:19091/transmission/web/` for private access. Do not manually edit

@@ -1,5 +1,5 @@
 (ns io.github.getcolors.alice.workflow-test
- (:require [clojure.test :refer [deftest is]] [clojure.java.io :as io]
+ (:require [clojure.test :refer [deftest is]] [clojure.java.io :as io] [clojure.string :as str]
            [green.workflow :as wf] [io.github.getcolors.alice.workflow :as workflow]
            [io.github.getcolors.alice.tools :as tools] [io.github.getcolors.alice.access :as access] [io.github.getcolors.alice.sync :as sync]
            [io.github.getcolors.compute-node :as compute]
@@ -164,10 +164,39 @@
       (spit template "must never be parsed as desired state")
       (with-redefs [io.github.getcolors.compute-ssh/ssh-resource!
                     (fn [_ _ operation _] (swap! operations conj operation)
-                      {:status "error" :error {:message "encrypted SSH authority missing; recover explicitly"}})]
+                      {:status "error" :error {:code "ssh_authority_missing" :message "SSH authority missing"}})]
         (doseq [event [:create :sync]]
           (let [result (access/resource-step (assoc vt/base :workdir (str dir) :green/event event))]
             (is (= 1 (:green/exit result)))
-            (is (= "encrypted SSH authority missing; recover explicitly" (:green/err result)))))
+            (is (str/includes? (:green/err result) "Cannot load the existing SSH identity"))
+            (is (str/includes? (:green/err result) "Local files indicate a previous deployment"))
+            (is (str/includes? (:green/err result) "restore the encrypted identity from backup"))
+            (is (str/includes? (:green/err result) "Droplet and provider SSH-key registration are absent"))
+            (is (str/includes? (:green/err result) (str dir "/" (:profile vt/base))))
+            (is (str/includes? (:green/err result) "No infrastructure was created by this attempt"))))
         (is (= ["inspect" "inspect"] @operations)))
       (finally (doseq [file (reverse (file-seq dir))] (.delete file))))))
+
+(deftest missing-authority-location-and-recovery-are-specific
+  (let [dir (temp-dir)]
+    (try
+      (with-redefs [io.github.getcolors.compute-ssh/ssh-resource!
+                    (fn [_ _ operation _]
+                      (is (= "inspect" operation))
+                      {:status "error" :error {:code "ssh_authority_missing" :message "SSH authority missing"}})]
+        (doseq [[backend prefix location] [["r2" "" "state/alice-test/ssh/app-access/resource.json"]
+                                          ["r2" "archive" "state/archive/alice-test/ssh/app-access/resource.json"]
+                                          ["local" "" (str dir "/alice-test/ssh/app-access/resource.json")]]]
+          (let [result (access/resource-step (assoc vt/base :workdir (str dir) :green/event :describe
+                                                   :provider-backend backend :s3-prefix prefix))
+                message (:green/err result)]
+            (is (= 1 (:green/exit result)))
+            (is (str/includes? message location))
+            (is (str/includes? message "This command requires an existing identity"))
+            (is (not (str/includes? message "Local files indicate")))
+            (is (not (str/includes? message "No infrastructure was created"))))))
+      (with-redefs [io.github.getcolors.compute-ssh/ssh-resource!
+                    (fn [& _] {:status "error" :error {:code "ssh_resource_failed" :message "Storage access denied"}})]
+        (is (= "Storage access denied"
+               (:green/err (access/resource-step (assoc vt/base :workdir (str dir) :green/event :describe))))))
+      (finally (.delete dir)))))

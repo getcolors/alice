@@ -18,13 +18,16 @@
    (.toPath (io/file (compute/sdk-workdir opts) (:profile opts) compute/node-id "compute.tf.json"))
    (into-array java.nio.file.LinkOption [java.nio.file.LinkOption/NOFOLLOW_LINKS])))
 (defn resource-step [opts]
-  (let [result (if (planning? opts) compute/placeholder-resource
+  (let [existing? (and (not (planning? opts)) (existing-consumer? opts))
+        result (if (planning? opts) compute/placeholder-resource
                   (ssh/ssh-resource! (compute/library-options opts) (request opts)
-                                     (if (or (#{:describe :tunnel :delete} (:green/event opts)) (existing-consumer? opts)) "inspect" "create")
+                                     (if (or (#{:describe :tunnel :delete} (:green/event opts)) existing?) "inspect" "create")
                                      (System/getenv)))]
     (if (= "ready" (:status result))
       (assoc opts :alice/ssh-resource result :green/exit 0)
-      (compute-error/failed-result opts result))))
+      (if (= "ssh_authority_missing" (get-in result [:error :code]))
+        (assoc opts :green/exit 1 :green/err (compute-error/missing-ssh-authority opts existing?))
+        (compute-error/failed-result opts result)))))
 (defn registration-step [opts]
   (let [result (if (planning? opts)
                  (library/build-registration! (compute/library-options opts) (compute/registration-request opts))
