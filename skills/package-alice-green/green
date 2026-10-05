@@ -19,7 +19,7 @@
 
 ;; Managed by `bb pin` — do not edit by hand. An initial nil is intentional:
 ;; the repository must be committed and pushed before a real SHA can be stamped.
-(def ^:private alice-sha "96c66eef7b448ca67e26a490f210f0d6990112f7")
+(def ^:private alice-sha "bce50e6eee6d92e56245a29ca092cb63f71fd3a1")
 
 (def ^:private alice-git-url "https://github.com/getcolors/alice.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
