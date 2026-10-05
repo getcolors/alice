@@ -99,6 +99,15 @@ changes. Failure during or after apply reports that changes may have occurred;
 inspect node state before retrying. This does not imply that resources from an
 earlier run are absent. Diagnostic handling never retries apply automatically.
 
+An inconsistent-state failure means the state was read but contains no resources
+while retaining outputs. The diagnostic identifies the affected node or SSH-key
+registration state. Retrying unchanged will fail again. Back up that state first,
+verify the corresponding resources in DigitalOcean using working provider
+credentials, then recover the state to match verified ownership. Do not blindly
+delete state or create a replacement SSH identity; retain the encrypted
+`app-access` authority. State recovery is a separate, explicitly authorized
+operation; sync does not repair state automatically.
+
 Credential-free `build` renders all preview stages under `<workdir>/build/<profile>/`.
 Real lifecycle operations keep `<workdir>/<profile>/`. This isolates placeholder
 identities and generated previews from live templates, state, and encrypted SSH

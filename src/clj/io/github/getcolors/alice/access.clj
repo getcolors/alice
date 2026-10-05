@@ -31,7 +31,7 @@
                  (library/compute-registration! (compute/library-options opts) (compute/registration-request opts) "create"))]
     (if (#{"ready" "built"} (:status result))
       (cond-> (assoc opts :green/exit 0) (= "ready" (:status result)) (assoc :alice/ssh-registration result))
-      (compute-error/failed-result opts result))))
+      (compute-error/failed-result (assoc opts :alice/error-context :registration) result))))
 (defn agent-step [opts]
   (if (planning? opts)
     (assoc opts :ssh-private-key-path (compute/placeholder-key opts) :alice/agent-socket "/home/build-placeholder/agent.sock" :green/exit 0)
@@ -50,4 +50,4 @@
   (let [result (library/compute-registration! (assoc (compute/library-options opts) :compute-prevent-destroy false)
                                              (compute/registration-request opts) "delete")]
     (if (= "destroyed" (:status result)) (assoc opts :green/exit 0)
-        (compute-error/failed-result opts result))))
+        (compute-error/failed-result (assoc opts :alice/error-context :registration) result))))

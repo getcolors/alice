@@ -4,6 +4,7 @@
             [clojure.test :refer [deftest is]]
             [green.scaffold :as sc]
             [io.github.getcolors.alice.tools :as tools]
+            [io.github.getcolors.alice.access :as access]
             [io.github.getcolors.alice.validate-test :as vt]))
 
 (defn- temp-dir []
@@ -211,3 +212,36 @@
       (is (str/includes? message "Backend request failed: 401 Unauthorized"))
       (is (not (str/includes? message "COLORS_PAR_DO_TOKEN")))
       (is (not (str/includes? message ".envrc.private"))))))
+
+(deftest inconsistent-state-identifies-registration-and-safe-recovery
+  (let [failure {:status "error" :error {:code "state_inconsistent" :stage "state"
+                  :message "State has no resources but still contains outputs. Back up state, verify provider resources, and recover state to match verified ownership. Retrying unchanged will fail again."
+                  :infrastructure_changes "none"}}]
+    (with-redefs [io.github.getcolors.compute-node/compute-registration! (fn [& _] failure)]
+      (doseq [step [access/registration-step access/registration-delete-step]
+              prefix ["" "archives"]]
+        (let [opts (assoc vt/base :green/event :sync :profile "alice-digitalocean"
+                         :r2-bucket "alice-state" :s3-prefix prefix)
+              result (step opts)
+              message (:green/err result)]
+          (is (= 1 (:green/exit result)))
+          (is (str/includes? message (str "Affected SSH-key registration state: alice-state/"
+                                         (when (seq prefix) (str prefix "/"))
+                                         "alice-digitalocean/alice-ssh-registration.tfstate")))
+          (is (str/includes? message "Back up state"))
+          (is (str/includes? message "Retrying unchanged will fail again"))
+          (is (str/includes? message "Verify the existing DigitalOcean SSH-key registration"))
+          (is (str/includes? message "retain the encrypted app-access SSH authority"))
+          (is (not (contains? result :alice/error-context))))))))
+
+(deftest inconsistent-node-state-does-not-prescribe-registration-recovery
+  (with-redefs [io.github.getcolors.compute-node/compute-node!
+                (fn [& _] {:status "error" :error {:code "state_inconsistent" :stage "state"
+                           :message "State has no resources but still contains outputs."
+                           :infrastructure_changes "none"}})]
+    (let [message (:green/err (tools/load-infrastructure-step
+                               (assoc vt/base :green/event :delete :provider-backend "local"
+                                      :workdir "/tmp/alice-diagnostics" :profile "diagnostics")))]
+      (is (str/includes? message "Affected compute node state:"))
+      (is (str/includes? message "/diagnostics/0/alice-node-0.tfstate"))
+      (is (not (str/includes? message "SSH-key registration step"))))))

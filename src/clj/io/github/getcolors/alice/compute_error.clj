@@ -1,11 +1,24 @@
 (ns io.github.getcolors.alice.compute-error
   "Present sanitized library failures with package-specific recovery advice."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [io.github.getcolors.alice.compute :as compute]))
 
 (defn- command-label [command]
   (when (and (vector? command) (seq command)
              (every? #(and (string? %) (re-matches #"[A-Za-z0-9_.-]+" %)) command))
     (str/join " " command)))
+
+(defn- state-context [opts registration?]
+  (let [filename (if registration? "alice-ssh-registration.tfstate" compute/state-filename)
+        backend (:provider-backend opts)
+        state-key (str/join "/" (remove #(or (nil? %) (= "" %))
+                                      [(:s3-prefix opts) (:profile opts) filename]))
+        bucket (get opts (keyword (str backend "-bucket")))
+        location (if (= "local" backend)
+                   (str (compute/sdk-workdir opts) "/" (:profile opts) "/"
+                        (if registration? "registration-app-access" compute/node-id) "/" filename)
+                   (str bucket "/" state-key (when (= "gcs" backend) "/default.tfstate")))]
+    (str "Affected " (if registration? "SSH-key registration" "compute node") " state: " location)))
 
 (defn format-error [opts result]
   (let [{:keys [code stage message command executable exit_code stderr credential infrastructure_changes auth_reason]}
@@ -14,6 +27,8 @@
         tofu? (= "tofu" (first command))
         startup? (and tofu? (= stage "init") (#{126 127} exit_code))
         token-rejected? (= "digitalocean_token_rejected" auth_reason)
+        inconsistent? (= "state_inconsistent" code)
+        registration? (= :registration (:alice/error-context opts))
         title (if (and (= code "command_failed") label)
                 (str (cond startup? "Could not start OpenTofu"
                            (and tofu? (= stage "init")) "OpenTofu initialization failed"
@@ -30,6 +45,9 @@
       (remove nil?
         [(when token-rejected? "DigitalOcean rejected COLORS_PAR_DO_TOKEN (HTTP 401 Unauthorized).")
          title
+         (when inconsistent? (state-context opts registration?))
+         (when (and inconsistent? registration?)
+           "The SSH-key registration step stopped. Verify the existing DigitalOcean SSH-key registration before recovering this state; retain the encrypted app-access SSH authority and do not generate a replacement identity.")
          (when (and label (not= code "command_failed"))
            (str "Command: `" label "`"
                 (when (integer? exit_code) (str " (exit code " exit_code ")"))))
@@ -48,4 +66,4 @@
            nil)]))))
 
 (defn failed-result [opts result]
-  (assoc opts :green/exit 1 :green/err (format-error opts result)))
+  (assoc (dissoc opts :alice/error-context) :green/exit 1 :green/err (format-error opts result)))
