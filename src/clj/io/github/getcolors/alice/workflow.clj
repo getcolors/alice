@@ -52,7 +52,7 @@
                (runtime-errors-fn opts)))]
           :after-validate
           (fn [opts _ {:keys [event real?]}]
-            (let [opts (cond-> opts (= :build event) (update :workdir #(str (io/file % "build"))))]
+            (let [opts (cond-> (if real? (access/runtime-workdir opts) opts) (= :build event) (update :workdir #(str (io/file % "build"))))]
               (if (and real? (create-like-events event)) (ssh-config/preflight! opts)
                   (assoc (if real? opts (ssh/with-machine-key opts)) :green/exit 0))))}
     env)))

@@ -1,10 +1,11 @@
 (ns io.github.getcolors.alice.access
   "Named encrypted SSH authority and one isolated workflow agent."
   (:require [green.scope :as scope]
-            [clojure.java.io :as io]
+            [clojure.string :as str]
             [io.github.getcolors.compute-ssh :as ssh]
             [io.github.getcolors.compute-node :as library]
             [io.github.getcolors.alice.compute :as compute]
+            [io.github.getcolors.alice.fresh-start :as fresh-start]
             [io.github.getcolors.alice.compute-error :as compute-error]))
 
 (def ^:dynamic *register!* nil)
@@ -12,21 +13,58 @@
   (scope/with-scope (fn [register!] (binding [*register!* register!] (f)))))
 (def request compute/ssh-request)
 (defn planning? [opts] (or (= :build (:green/event opts)) (:green/dry-run opts)))
-(defn- existing-consumer? [opts]
-  ;; Presence is evidence only: never parse generated templates as source.
-  (java.nio.file.Files/exists
-   (.toPath (io/file (compute/sdk-workdir opts) (:profile opts) compute/node-id "compute.tf.json"))
-   (into-array java.nio.file.LinkOption [java.nio.file.LinkOption/NOFOLLOW_LINKS])))
+(defn- cleanup-runtime! [directory]
+  (with-open [walk (java.nio.file.Files/walk directory (make-array java.nio.file.FileVisitOption 0))]
+    (let [paths (vec (iterator-seq (.iterator walk)))
+          recovery? (some (fn [path]
+                            (let [relative (.relativize directory path)
+                                  filename (str (.getFileName path))]
+                              (and (not-any? #(= ".terraform" (str %)) (iterator-seq (.iterator relative)))
+                                   (or (str/ends-with? filename ".tfstate")
+                                       (str/ends-with? filename ".tfstate.backup"))))) paths)]
+      (if recovery?
+        (binding [*out* *err*]
+          (println (str "Preserved OpenTofu recovery state in " directory
+                        ". Back up this directory and recover remote state before retrying; Alice will not reuse it as ownership evidence.")))
+        (doseq [path (reverse paths)] (java.nio.file.Files/deleteIfExists path))))))
+
+(defn runtime-workdir [opts]
+  (if (or (planning? opts) (= "local" (:provider-backend opts)) (:alice/runtime-workdir opts)
+          (not (#{:create :sync :delete :describe :tunnel} (:green/event opts))))
+    opts
+    (do
+      (when-not *register!* (throw (ex-info "Remote operations require an owned runtime scope." {})))
+      (let [directory (java.nio.file.Files/createTempDirectory
+                        "alice-runtime-"
+                        (into-array java.nio.file.attribute.FileAttribute
+                          [(java.nio.file.attribute.PosixFilePermissions/asFileAttribute
+                             (java.nio.file.attribute.PosixFilePermissions/fromString "rwx------"))]))]
+        ;; Register first: process finalizers run before resources, and the later
+        ;; agent resource finalizer runs before this directory under LIFO cleanup.
+        (*register!* :resource #(cleanup-runtime! directory))
+        (assoc opts :workdir (str directory) :alice/runtime-workdir true)))))
+
 (defn resource-step [opts]
-  (let [existing? (and (not (planning? opts)) (existing-consumer? opts))
-        result (if (planning? opts) compute/placeholder-resource
-                  (ssh/ssh-resource! (compute/library-options opts) (request opts)
-                                     (if (or (#{:describe :tunnel :delete} (:green/event opts)) existing?) "inspect" "create")
-                                     (System/getenv)))]
+  (let [environment (System/getenv)
+        inspected (if (planning? opts) compute/placeholder-resource
+                      (ssh/ssh-resource! (compute/library-options opts) (request opts) "inspect" environment))
+        fresh? (and (#{:create :sync} (:green/event opts))
+                    (= "ssh_authority_missing" (get-in inspected [:error :code])))
+        result (if fresh?
+                 (let [verified (fresh-start/verify-absence opts environment)]
+                   (if (= "absent" (:status verified))
+                     (ssh/ssh-resource! (compute/library-options opts)
+                                        (assoc (request opts) :verified_absent true) "create" environment)
+                     verified))
+                 (if (and (#{:create :sync} (:green/event opts))
+                          (not (planning? opts)) (= "ready" (:status inspected)))
+                   (let [verified (fresh-start/verify-state-ownership opts environment)]
+                     (if (= "absent" (:status verified)) inspected verified))
+                   inspected))]
     (if (= "ready" (:status result))
       (assoc opts :alice/ssh-resource result :green/exit 0)
       (if (= "ssh_authority_missing" (get-in result [:error :code]))
-        (assoc opts :green/exit 1 :green/err (compute-error/missing-ssh-authority opts existing?))
+        (assoc opts :green/exit 1 :green/err (compute-error/missing-ssh-authority opts))
         (compute-error/failed-result opts result)))))
 (defn registration-step [opts]
   (let [result (if (planning? opts)

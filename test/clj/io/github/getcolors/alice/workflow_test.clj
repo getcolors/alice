@@ -155,27 +155,64 @@
         (is (.exists (io/file dir "build" (:profile vt/base) "alice-ansible-remote" "inventory.json"))))
       (finally (doseq [file (reverse (file-seq dir))] (.delete file))))))
 
-(deftest existing-runtime-consumer-refuses-new-ssh-authority
+(deftest stale-runtime-files-do-not-establish-ownership
   (let [dir (temp-dir)
         template (io/file dir (:profile vt/base) "0" "compute.tf.json")
         operations (atom [])]
     (try
       (io/make-parents template)
-      (spit template "must never be parsed as desired state")
+      (spit template "old recovery material")
       (with-redefs [io.github.getcolors.compute-ssh/ssh-resource!
-                    (fn [_ _ operation _] (swap! operations conj operation)
-                      {:status "error" :error {:code "ssh_authority_missing" :message "SSH authority missing"}})]
+                    (fn [_ request operation _]
+                      (swap! operations conj operation)
+                      (if (= "inspect" operation)
+                        {:status "error" :error {:code "ssh_authority_missing"}}
+                        (do (is (true? (:verified_absent request)))
+                            io.github.getcolors.alice.compute/placeholder-resource)))
+                    io.github.getcolors.alice.fresh-start/verify-absence
+                    (fn [& _] (swap! operations conj :verified) {:status "absent"})]
         (doseq [event [:create :sync]]
           (let [result (access/resource-step (assoc vt/base :workdir (str dir) :green/event event))]
-            (is (= 1 (:green/exit result)))
-            (is (str/includes? (:green/err result) "Cannot load the existing SSH identity"))
-            (is (str/includes? (:green/err result) "Local files indicate a previous deployment"))
-            (is (str/includes? (:green/err result) "restore the encrypted identity from backup"))
-            (is (str/includes? (:green/err result) "Droplet and provider SSH-key registration are absent"))
-            (is (str/includes? (:green/err result) (str dir "/" (:profile vt/base))))
-            (is (str/includes? (:green/err result) "No infrastructure was created by this attempt"))))
-        (is (= ["inspect" "inspect"] @operations)))
+            (is (= 0 (:green/exit result)))))
+        (is (= ["inspect" :verified "create" "inspect" :verified "create"] @operations)))
+      (is (= "old recovery material" (slurp template)))
       (finally (doseq [file (reverse (file-seq dir))] (.delete file))))))
+
+(deftest absent-authority-with-unverified-consumers-never-creates
+  (let [operations (atom [])]
+    (with-redefs [io.github.getcolors.compute-ssh/ssh-resource!
+                  (fn [_ _ operation _] (swap! operations conj operation)
+                    {:status "error" :error {:code "ssh_authority_missing"}})
+                  io.github.getcolors.alice.fresh-start/verify-absence
+                  (fn [& _] {:status "error" :error {:code "fresh_start_unverified"
+                                                    :message "Restore ownership records."}})]
+      (let [result (access/resource-step (assoc vt/base :green/event :sync))]
+        (is (= 1 (:green/exit result)))
+        (is (= "Restore ownership records." (:green/err result)))
+        (is (= ["inspect"] @operations))))))
+
+(deftest remote-workdir-is-owned-and-disposable-after-processes-and-agent
+  (let [old (temp-dir) marker (io/file old "recovery") seen (atom []) runtime (atom nil)]
+    (try
+      (spit marker "preserve")
+      (access/scoped
+        (fn []
+          (let [opts (access/runtime-workdir (assoc vt/base :green/event :sync :workdir (str old)))
+                dir (io/file (:workdir opts))]
+            (reset! runtime dir)
+            (is (not= (str old) (:workdir opts)))
+            (is (.isDirectory dir))
+            (is (= opts (access/runtime-workdir opts)))
+            (access/*register!* :resource #(do (is (.exists dir)) (swap! seen conj :agent)))
+            (access/*register!* :process #(do (is (.exists dir)) (swap! seen conj :process))))))
+      (is (= [:process :agent] @seen))
+      (is (not (.exists @runtime)))
+      (is (= "preserve" (slurp marker)))
+      (doseq [opts [(assoc vt/base :green/event :create :provider-backend "local")
+                    (assoc vt/base :green/event :build)
+                    (assoc vt/base :green/event :sync :green/dry-run true)]]
+        (is (= opts (access/runtime-workdir opts))))
+      (finally (.delete marker) (.delete old)))))
 
 (deftest missing-authority-location-and-recovery-are-specific
   (let [dir (temp-dir)]
@@ -200,3 +237,67 @@
         (is (= "Storage access denied"
                (:green/err (access/resource-step (assoc vt/base :workdir (str dir) :green/event :describe))))))
       (finally (.delete dir)))))
+
+(deftest ready-authority-still-checks-missing-state-ownership
+  (let [calls (atom [])]
+    (with-redefs [io.github.getcolors.compute-ssh/ssh-resource!
+                  (fn [_ _ operation _] (swap! calls conj operation)
+                    io.github.getcolors.alice.compute/placeholder-resource)
+                  io.github.getcolors.alice.fresh-start/verify-state-ownership
+                  (fn [& _] (swap! calls conj :ownership)
+                    {:status "error" :error {:code "fresh_start_unverified"
+                                             :message "Restore missing compute state before retrying."}})]
+      (doseq [event [:create :sync]]
+        (let [result (access/resource-step (assoc vt/base :green/event event))]
+          (is (= 1 (:green/exit result)))
+          (is (str/includes? (:green/err result) "Restore missing compute state"))))
+      (is (= ["inspect" :ownership "inspect" :ownership] @calls)))))
+
+(deftest real-remote-start-allocates-temporary-workdir-after-validation
+  (let [runtime (atom nil)]
+    (access/scoped
+      (fn []
+        (let [result (workflow/start-step (assoc vt/base :green/event :describe) {} (constantly []))]
+          (is (= 0 (:green/exit result)))
+          (is (:alice/runtime-workdir result))
+          (reset! runtime (io/file (:workdir result)))
+          (is (.isDirectory @runtime)))))
+    (is (not (.exists @runtime)))))
+
+(deftest remote-workdir-cleans-up-after-failure
+  (let [runtime (atom nil)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"deliberate failure"
+          (access/scoped
+            (fn []
+              (reset! runtime (io/file (:workdir (access/runtime-workdir
+                                                 (assoc vt/base :green/event :sync)))))
+              (throw (ex-info "deliberate failure" {}))))))
+    (is (not (.exists @runtime)))))
+
+(deftest remote-workdir-preserves-emergency-state-and-explains-recovery
+  (let [runtime (atom nil) warning (java.io.StringWriter.)]
+    (try
+      (binding [*err* warning]
+        (access/scoped
+          (fn []
+            (let [dir (io/file (:workdir (access/runtime-workdir (assoc vt/base :green/event :sync))))
+                  snapshot (io/file dir "alice-test" "0" "errored.tfstate")]
+              (reset! runtime dir)
+              (io/make-parents snapshot)
+              (spit snapshot "emergency state")))))
+      (is (.exists (io/file @runtime "alice-test" "0" "errored.tfstate")))
+      (is (str/includes? (str warning) "Preserved OpenTofu recovery state"))
+      (is (str/includes? (str warning) (str @runtime)))
+      (is (str/includes? (str warning) "Back up this directory"))
+      (finally (when @runtime (doseq [file (reverse (file-seq @runtime))] (.delete file)))))))
+
+(deftest backend-initialization-metadata-does-not-preserve-temporary-workdir
+  (let [runtime (atom nil)]
+    (access/scoped
+      (fn []
+        (let [dir (io/file (:workdir (access/runtime-workdir (assoc vt/base :green/event :sync))))
+              metadata (io/file dir "alice-test" "0" ".terraform" "terraform.tfstate")]
+          (reset! runtime dir)
+          (io/make-parents metadata)
+          (spit metadata "backend config"))))
+    (is (not (.exists @runtime)))))

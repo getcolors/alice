@@ -33,8 +33,10 @@ checksummed copy, and teardown. The compute library owns the node; separate SSH 
 resources; it does not expand topology or orchestrate a deployment.
 
 OpenTofu runs in `<SDK workdir>/<profile>/0/` and uses its default `.terraform/`
-directory. Build renders separate previews under `<workdir>/build/<profile>/`. Templates,
-initialization files, and the node directory are never deleted by cleanup.
+directory. Remote-backed commands use an owned temporary SDK workdir, cleaned
+after owned processes and agents stop. Local-backed templates, initialization
+files, and the node directory are retained. Build renders separate previews
+under `<workdir>/build/<profile>/`.
 The S3 state key is `<s3-prefix>/<profile>/alice-node-0.tfstate`; local state
 lives at `<SDK workdir>/<profile>/0/alice-node-0.tfstate`. An empty S3 prefix
 omits its separator.
@@ -70,8 +72,11 @@ or failure. The package still owns and validates its local SSH config block.
 Delete removes the alias, destroys compute, and deletes the separate provider
 registration. It retains the encrypted SSH resource. SSH resource destruction
 and passphrase rotation are separate explicit library operations. Changing the
-passphrase environment variable does not rotate the key. Missing authority or
-an incorrect secret fails closed. This is a greenfield API; existing deployments
+passphrase environment variable does not rotate the key. An incorrect secret or
+failed authority read fails closed. Create and sync may generate a missing identity
+only after read-only checks confirm both backend state records and the matching
+DigitalOcean Droplet and SSH-key registration are absent. Existing records or
+provider resources require recovery; local files cannot establish ownership. This is a greenfield API; existing deployments
 are not adopted or migrated automatically.
 
 ## Architecture and safety
@@ -113,8 +118,9 @@ remove that step without proving the packaged profile can notify systemd.
 Only a successful library inspection of readable state with both empty resources
 and empty outputs confirms destruction. Repeated Alice delete then skips former
 hosts, removed keys, and infrastructure operations and resumes generated-file
-cleanup. Missing or unreadable state still refuses. Cleanup retains compute
-templates, initialization files, state, and unrelated files.
+cleanup. Missing or unreadable state still refuses. Cleanup retains local-backend
+compute templates, initialization files, state, and unrelated files; remote-backed
+workspaces are temporary and removed after owned processes stop.
 
 ## Pins and installed launchers
 
@@ -144,11 +150,24 @@ paths already encode the repository. Never add one tag without the other.
 Work on the current branch. Do not commit or push unless explicitly authorized.
 
 Credential-free `build` renders all preview stages under `<workdir>/build/<profile>/`.
-Real lifecycle operations keep `<workdir>/<profile>/`. This isolates placeholder
-identities and generated previews from live templates, state, and encrypted SSH
-authority, so build remains safe after a deployment exists. Preview files are
-replaced on subsequent builds; they are never used to provision the deployment.
+Remote-backed lifecycle commands use a private temporary workdir for each invocation,
+including describe and tunnel. Owned processes and the SSH agent stop before its
+removal. If OpenTofu leaves an emergency state snapshot or backup outside
+`.terraform/`, Alice preserves the temporary directory and prints its recovery
+path. Back it up and recover remote state before retrying; it is never reused
+automatically or treated as authoritative ownership. Remote state and encrypted
+authority determine ownership; stale local
+templates and caches do not. Previously retained workdirs remain untouched as
+recovery material. Local-backed commands retain `<workdir>/<profile>/` because
+it contains authoritative state and SSH authority. Preview files are replaced on
+subsequent builds and never used to provision the deployment.
 
 For working-tree development, the launcher directly honors `ALICE_LIB_ROOT`,
 `GREEN_LIB_ROOT`, and `COLORS_COMPUTE_LIB_ROOT` (the latter points to the library's
 `green/` directory). No wrapper script is required.
+
+Fresh-start checks match the configured Droplet and SSH-key registration names.
+If ownership records were deleted after resources were renamed, or if a detached
+reserved IP remains, these name checks cannot establish ownership. Recover the
+missing records and verify those resources separately; fresh-start checks are
+not automatic adoption or a complete account inventory.

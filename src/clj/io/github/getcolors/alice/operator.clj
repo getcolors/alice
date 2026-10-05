@@ -46,10 +46,12 @@
              (nil? local-port) {:green/exit 2 :green/err "local port must be from 1 to 65535"}
              :else (access/scoped
                      (fn []
-                       (let [ready (-> opts (assoc :green/event :tunnel) access/resource-step access/agent-step)
-                             {:keys [exit err]} (runner (command ready local-port))]
-                     (cond-> {:green/exit (if (zero? exit) 0 (max 1 exit))}
-                       (and (not (zero? exit)) (not-empty err))
-                       (assoc :green/err err)))))))))
+                       (let [ready (-> opts (assoc :green/event :tunnel) access/runtime-workdir access/resource-step)]
+                         (if (pos? (or (:green/exit ready) 0)) ready
+                           (let [ready (access/agent-step ready)
+                                 {:keys [exit err]} (runner (command ready local-port))]
+                             (cond-> {:green/exit (if (zero? exit) 0 (max 1 exit))}
+                               (and (not (zero? exit)) (not-empty err))
+                               (assoc :green/err err)))))))))))
      (catch Throwable t
        {:green/exit 2 :green/err (or (ex-message t) (str (class t)))}))))

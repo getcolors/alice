@@ -35,3 +35,17 @@
     (let [result (operator/run file ["70000"] (fn [_] {:exit 0}) {})]
       (is (= 2 (:green/exit result)))
       (is (str/includes? (:green/err result) "local port")))))
+
+(deftest tunnel-uses-owned-workdir-and-stops-on-authority-failure
+  (let [file (str (temp-dir) "/colors.yml") runtime (atom nil)]
+    (spit file "profile: demo\nprovider-backend: r2\n")
+    (with-redefs [access/resource-step
+                  (fn [opts]
+                    (reset! runtime (java.io.File. (:workdir opts)))
+                    (is (.isDirectory @runtime))
+                    (assoc opts :green/exit 1 :green/err "Restore encrypted identity."))
+                  access/agent-step (fn [_] (throw (Exception. "agent must not start")))]
+      (let [result (operator/run file [] (fn [_] (throw (Exception. "SSH must not start"))) {})]
+        (is (= 1 (:green/exit result)))
+        (is (= "Restore encrypted identity." (:green/err result)))
+        (is (not (.exists @runtime)))))))

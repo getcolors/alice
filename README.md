@@ -73,8 +73,11 @@ or failure. The package still owns and validates its local SSH config block.
 Delete removes the alias, destroys compute, and deletes the separate provider
 registration. It retains the encrypted SSH resource. SSH resource destruction
 and passphrase rotation are separate explicit library operations. Changing the
-passphrase environment variable does not rotate the key. Missing authority or
-an incorrect secret fails closed. This is a greenfield API; existing deployments
+passphrase environment variable does not rotate the key. An incorrect secret or
+failed authority read fails closed. Create and sync may generate a missing identity
+only after read-only checks confirm both backend state records and the matching
+DigitalOcean Droplet and SSH-key registration are absent. Existing records or
+provider resources require recovery; local files cannot establish ownership. This is a greenfield API; existing deployments
 are not adopted or migrated automatically.
 
 For working-tree dependency tests:
@@ -97,10 +100,17 @@ Only failures before apply say no infrastructure changes were made by that
 operation; failures during or after apply advise inspecting state before retry.
 
 Credential-free `build` renders all preview stages under `<workdir>/build/<profile>/`.
-Real lifecycle operations keep `<workdir>/<profile>/`. This isolates placeholder
-identities and generated previews from live templates, state, and encrypted SSH
-authority, so build remains safe after a deployment exists. Preview files are
-replaced on subsequent builds; they are never used to provision the deployment.
+Remote-backed lifecycle commands use a private temporary workdir for each invocation,
+including describe and tunnel. Owned processes and the SSH agent stop before its
+removal. If OpenTofu leaves an emergency state snapshot or backup outside
+`.terraform/`, Alice preserves the temporary directory and prints its recovery
+path. Back it up and recover remote state before retrying; it is never reused
+automatically or treated as authoritative ownership. Remote state and encrypted
+authority determine ownership; stale local
+templates and caches do not. Previously retained workdirs remain untouched as
+recovery material. Local-backed commands retain `<workdir>/<profile>/` because
+it contains authoritative state and SSH authority. Preview files are replaced on
+subsequent builds and never used to provision the deployment.
 
 For working-tree development, the launcher directly honors `ALICE_LIB_ROOT`,
 `GREEN_LIB_ROOT`, and `COLORS_COMPUTE_LIB_ROOT` (the latter points to the library's
@@ -112,3 +122,9 @@ checkout is clean, on `main`, uses the expected origin, and matches the current
 remote `main` SHA before changing either dependency. It preserves the rest of
 `deps.edn`; `bb pin:dependencies:test` checks the refusal paths offline. After
 Alice itself is committed and pushed, `bb pin` stamps its launcher separately.
+
+Fresh-start checks match the configured Droplet and SSH-key registration names.
+If ownership records were deleted after resources were renamed, or if a detached
+reserved IP remains, these name checks cannot establish ownership. Recover the
+missing records and verify those resources separately; fresh-start checks are
+not automatic adoption or a complete account inventory.
