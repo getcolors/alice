@@ -67,3 +67,8 @@ No live Alice resources were created, modified or deleted for this update.
 
 Published dependency for this update: PocketDeploy
 `75b20da90f704a39c745e62ad68907039602bc59`.
+
+The published Alice source `8f27cabc67d351f136cdbcba895837b9bc3fe119`
+passed all 42 tests with the locked published dependency and source/wheel builds.
+Both portable launcher copies pin that source; the copied-launcher check passed
+from an unrelated temporary directory. No live Alice validation was requested.
