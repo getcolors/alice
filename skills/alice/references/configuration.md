@@ -38,3 +38,23 @@ and --overwrite, with the same recovery semantics as PocketDeploy.
 Legacy backend, Green, Terraform and passphrase fields are refused. Preserve old
 state and authority separately; this version does not import them. SSH keys and
 controller state are local private files with explicit Vault checkpoints.
+
+## SSH configuration fragments
+
+Alice aliases live in `~/.ssh/config.d/00-alice-<profile>.conf` through the
+shared PocketDeploy writer. It requires an existing unconditional Include in
+`~/.ssh/config`, before options that could override the alias's pinned
+connection settings:
+
+```sshconfig
+Host *
+    Include config.d/*
+```
+
+Keep the Include before other Host stanzas and global defaults. OpenSSH does
+not automatically read `config.d`. The writer leaves the main config unchanged;
+installation and removal affect only the owned fragment. Converge, and therefore
+sync, still install the alias. Missing Includes, conflicting aliases, unsafe
+paths and legacy managed blocks in the main config are refused. Existing managed
+blocks need a separate migration before the new writer can install a fragment.
+Copied launchers retain their previous behavior until their published pin is updated.

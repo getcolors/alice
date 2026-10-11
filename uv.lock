@@ -17,7 +17,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pocketdeploy", git = "https://github.com/pocketcontext/pocketdeploy.git?rev=75b20da90f704a39c745e62ad68907039602bc59" },
+    { name = "pocketdeploy", git = "https://github.com/pocketcontext/pocketdeploy.git?rev=843f4c001b2aa32b8b55756e9340656e06b036e0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8,<10" },
 ]
 provides-extras = ["test"]
@@ -79,7 +79,7 @@ wheels = [
 [[package]]
 name = "pocketdeploy"
 version = "0.1.0"
-source = { git = "https://github.com/pocketcontext/pocketdeploy.git?rev=75b20da90f704a39c745e62ad68907039602bc59#75b20da90f704a39c745e62ad68907039602bc59" }
+source = { git = "https://github.com/pocketcontext/pocketdeploy.git?rev=843f4c001b2aa32b8b55756e9340656e06b036e0#843f4c001b2aa32b8b55756e9340656e06b036e0" }
 dependencies = [
     { name = "blue" },
 ]
