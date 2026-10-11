@@ -11,3 +11,4 @@ jobs:
       - run: uv sync --locked --extra test
       - run: uv run --locked --extra test pytest
       - run: uv build
+      - run: uv run python scripts/check-launcher.py

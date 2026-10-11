@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["alice-transmission @ git+https://github.com/getcolors/alice.git@RELEASE_COMMIT"]
+# dependencies = ["alice-transmission @ git+https://github.com/getcolors/alice.git@4411a3981d6f5ff3f8f773e703449901e8347552"]
 # ///
 """Portable Alice; configuration follows the caller."""
 from alice.cli import main
