@@ -53,3 +53,11 @@ configuration. Live tests use a separate disposable profile and explicit cloud
 authorization. MIT licensed.
 
 See [verification](docs/verification.md) for dated tests and live-check limits.
+
+Failures carry structured, output-free diagnostics: a fixed logical operation,
+category, elapsed time and (when available) exit code, signal or HTTP status.
+Remote setup diagnostics survive SSH transport; RPC distinguishes malformed
+responses, rejection, HTTP, connection and timeout failures; rsync identifies
+incremental versus final checksummed copying. Diagnostics never include command
+arguments, paths, magnet links, torrent names, session headers or response bodies.
+No masking or output excerpts are used, and retry/deletion policy is unchanged.

@@ -6,6 +6,11 @@ from pathlib import Path
 import pwd
 import subprocess
 import sys
+import time
+
+# Production receives this stdlib helper prepended to the SSH program.
+if 'build_diagnostic' not in globals():
+    from pocketdeploy.diagnostics import build_diagnostic, CommandError
 
 STAGE = 'validation'
 
@@ -13,8 +18,17 @@ DOWNLOADS = '/var/lib/transmission-daemon/downloads'
 
 
 def run(*args, check=True):
-    return subprocess.run(args, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          text=True, env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
+    started = time.monotonic()
+    operation = 'transmission-' + STAGE
+    try:
+        result = subprocess.run(args, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                text=True, env={**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'})
+    except OSError:
+        raise CommandError(build_diagnostic(operation, 'unavailable', elapsed_seconds=time.monotonic() - started)) from None
+    if check and result.returncode:
+        raise CommandError(build_diagnostic(operation, 'signal' if result.returncode < 0 else 'nonzero_exit', returncode=result.returncode,
+                                           elapsed_seconds=time.monotonic() - started)) from None
+    return result
 
 
 def main(request):
@@ -71,6 +85,5 @@ if __name__ == '__main__':
             result = main(request)
     except Exception as error:
         result = {'ok': False, 'stage': STAGE}
-        if isinstance(error, subprocess.CalledProcessError):
-            result['exit_code'] = error.returncode
+        result['diagnostic'] = error.diagnostic if isinstance(error, CommandError) else build_diagnostic('transmission-' + STAGE)
     print(json.dumps(result))

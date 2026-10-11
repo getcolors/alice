@@ -94,3 +94,70 @@ def test_rpc_failure_is_sanitized(monkeypatch):
     with pytest.raises(DeployError) as error:
         Client(9091).call('session-get')
     assert 'PRIVATE' not in str(error.value)
+
+
+@pytest.mark.parametrize('response, category', [
+    (b'[]', 'invalid_response'), (b'{"result":"success","arguments":[]}', 'invalid_response'),
+    (b'PRIVATE', 'invalid_response'), (b'{"result":"PRIVATE"}', 'rejected'),
+])
+def test_rpc_structured_failure_excludes_response(monkeypatch, response, category):
+    from io import BytesIO
+    from alice.transmission import RPC as Client
+    monkeypatch.setattr('alice.transmission.urlopen', lambda *a, **kw: BytesIO(response))
+    with pytest.raises(DeployError) as failure:
+        Client(9091).call('torrent-add', {'filename': MAGNET})
+    assert failure.value.diagnostic['category'] == category
+    assert 'PRIVATE' not in repr(failure.value.diagnostic)
+    assert MAGNET not in repr(failure.value.diagnostic)
+
+
+@pytest.mark.parametrize('kind, category', [('http', 'http'), ('timeout', 'timeout'), ('connection', 'connection')])
+def test_rpc_transport_diagnostics(monkeypatch, kind, category):
+    from urllib.error import HTTPError, URLError
+    from alice.transmission import RPC as Client
+    def fail(*a, **kw):
+        if kind == 'http':
+            raise HTTPError('PRIVATE', 503, 'PRIVATE', {'X-Transmission-Session-Id': 'PRIVATE'}, None)
+        raise URLError(TimeoutError('PRIVATE') if kind == 'timeout' else OSError('PRIVATE'))
+    monkeypatch.setattr('alice.transmission.urlopen', fail)
+    with pytest.raises(DeployError) as failure:
+        Client(9091).call('session-get')
+    assert failure.value.diagnostic['category'] == category
+    assert 'PRIVATE' not in repr(failure.value.diagnostic)
+
+
+@pytest.mark.parametrize('checksum', [False, True])
+@pytest.mark.parametrize('returncode', [23, -15])
+def test_copy_diagnostic_excludes_paths(monkeypatch, tmp_path, checksum, returncode):
+    from types import SimpleNamespace
+    monkeypatch.setattr('alice.transmission.subprocess.run', lambda *a, **kw: SimpleNamespace(returncode=returncode))
+    with pytest.raises(DeployError) as failure:
+        copy_downloads(SimpleNamespace(rsync_shell=lambda: 'PRIVATE'),
+                       {'user': 'PRIVATE', 'ip': 'PRIVATE'}, tmp_path / 'PRIVATE', checksum=checksum)
+    diagnostic = failure.value.diagnostic
+    assert diagnostic['operation'] == ('downloads-checksum-copy' if checksum else 'downloads-incremental-copy')
+    assert diagnostic['category'] == ('signal' if returncode < 0 else 'nonzero_exit')
+    assert 'PRIVATE' not in repr(diagnostic)
+
+
+def test_download_failure_retains_deployment():
+    class FailedRPC(RPC):
+        def call(self, method, arguments):
+            result = super().call(method, arguments)
+            result['torrents'][0]['error'] = 1
+            return result
+    with pytest.raises(DeployError) as failure:
+        sync_downloads(FailedRPC(), [MAGNET], lambda **kw: pytest.fail('copy'),
+                       lambda: pytest.fail('stop'), lambda: pytest.fail('delete'))
+    assert failure.value.diagnostic['operation'] == 'transmission-download'
+
+
+def test_rpc_invalid_torrent_list_is_diagnosed(monkeypatch):
+    from io import BytesIO
+    from alice.transmission import RPC as Client
+    monkeypatch.setattr('alice.transmission.urlopen', lambda *a, **kw: BytesIO(
+        b'{"result":"success","arguments":{"torrents":["PRIVATE"]}}'))
+    with pytest.raises(DeployError) as failure:
+        Client(9091).call('torrent-get')
+    assert failure.value.diagnostic['category'] == 'invalid_response'
+    assert 'PRIVATE' not in repr(failure.value.diagnostic)

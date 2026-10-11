@@ -55,3 +55,15 @@ fixture did not resolve metadata, so the transfer used supplied metainfo and a
 webseed. Vault save/restore and migration of legacy Terraform ownership were not
 performed. The existing `alice-digitalocean` repository and its old state/keys
 were not changed. These observations are dated checks, not monitoring.
+
+## Structured diagnostics update — 11 October 2026
+
+The diagnostics change passed 42 synthetic Alice tests against the shared
+PocketDeploy implementation. Coverage includes remote exit preservation,
+malformed diagnostic rejection, source-injected remote execution, RPC response
+and transport categories, rsync exit/signal attribution, private-value exclusion,
+and retention on incremental copy, stop, final copy and download failures.
+No live Alice resources were created, modified or deleted for this update.
+
+Published dependency for this update: PocketDeploy
+`75b20da90f704a39c745e62ad68907039602bc59`.

@@ -2,18 +2,21 @@
 import json
 from pathlib import Path
 from pocketdeploy.common import DeployError
+from pocketdeploy import diagnostics
 from pocketdeploy.runtime import initialize, delete_compute
 from pocketdeploy import ssh_config
 from .transmission import tunnel, copy_downloads, sync_downloads
 
 
 def remote(host, connection, config, action):
-    result = host.run_python(connection, Path(__file__).with_name('remote.py').read_text(),
+    result = host.run_python(connection, Path(diagnostics.__file__).read_text() + '\n' + Path(__file__).with_name('remote.py').read_text(),
                              {'action': action, 'port': config['transmission-rpc-port']}, timeout=1200)
     if not isinstance(result, dict) or result.get('ok') is not True:
         stage = result.get('stage') if isinstance(result, dict) else None
         stage = stage if stage in {'validation', 'stop', 'apt-update', 'apt-install', 'apparmor', 'configuration', 'service'} else 'provisioning'
-        raise DeployError('Transmission ' + stage + ' failed; deployment retained.', stage=stage)
+        diagnostic = diagnostics.validate_diagnostic(result.get('diagnostic'),
+                      allowed_operations={'transmission-' + stage}) if isinstance(result, dict) else None
+        raise DeployError('Transmission ' + stage + ' failed; deployment retained.', stage=stage, diagnostic=diagnostic)
     return result
 
 

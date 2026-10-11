@@ -67,3 +67,30 @@ def test_converge_resolves_matching_retry_only(monkeypatch, tmp_path):
                         deployment, SimpleNamespace(state=state, cloud=cloud, host=host, root=tmp_path), 1)
     assert completed == [3, 1]
     assert '_cloud_init' not in deployment
+
+
+@pytest.mark.parametrize('diagnostic, expected', [
+    ({'operation': 'transmission-service', 'category': 'nonzero_exit', 'exit_code': 7}, 7),
+    ({'operation': 'PRIVATE', 'category': 'nonzero_exit', 'exit_code': 7}, None),
+    ({'operation': 'transmission-service', 'category': 'unknown', 'stderr': 'PRIVATE'}, None),
+])
+def test_remote_diagnostic_validation(diagnostic, expected):
+    host = SimpleNamespace(run_python=lambda *a, **kw: {'ok': False, 'stage': 'service', 'diagnostic': diagnostic})
+    with pytest.raises(DeployError) as failure:
+        controller.remote(host, {}, {'transmission-rpc-port': 9091}, 'converge')
+    assert (failure.value.diagnostic or {}).get('exit_code') == expected
+    assert 'PRIVATE' not in repr(failure.value.diagnostic)
+
+
+def test_cli_reports_structured_diagnostic(monkeypatch, capsys):
+    import json
+    from alice import cli
+    def execute(args):
+        raise DeployError('Download copy failed; deployment retained.', diagnostic={
+            'operation': 'downloads-checksum-copy', 'category': 'nonzero_exit', 'exit_code': 23})
+    monkeypatch.setattr(cli, 'execute', execute)
+    assert cli.main(['sync', '--json']) == 1
+    output = capsys.readouterr()
+    result = json.loads(output.out or output.err)
+    assert 'downloads-checksum-copy' in json.dumps(result)
+    assert '23' in json.dumps(result)

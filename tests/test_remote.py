@@ -54,3 +54,26 @@ def test_invalid_port_never_installs(monkeypatch):
     monkeypatch.setattr(remote, 'run', lambda *a, **kw: pytest.fail('must not run'))
     with pytest.raises(ValueError):
         remote.main({'action': 'converge', 'port': True})
+
+
+def test_remote_runner_discards_private_output(monkeypatch):
+    from pocketdeploy.diagnostics import CommandError
+    remote.STAGE = 'service'
+    def run(*args, **kwargs):
+        assert kwargs['stdout'] == remote.subprocess.DEVNULL
+        assert kwargs['stderr'] == remote.subprocess.DEVNULL
+        return SimpleNamespace(returncode=7)
+    monkeypatch.setattr(remote.subprocess, 'run', run)
+    with pytest.raises(CommandError) as failure:
+        remote.run('PRIVATE', 'PRIVATE')
+    assert failure.value.diagnostic['exit_code'] == 7
+    assert failure.value.diagnostic['operation'] == 'transmission-service'
+    assert 'PRIVATE' not in str(failure.value)
+
+
+def test_injected_remote_needs_no_installed_pocketdeploy():
+    from pocketdeploy import diagnostics
+    source = Path(diagnostics.__file__).read_text() + '\n' + Path(remote.__file__).read_text()
+    namespace = {'__name__': 'injected'}
+    exec(compile(source, '<remote>', 'exec'), namespace)
+    assert namespace['build_diagnostic'].__module__ == 'injected'
