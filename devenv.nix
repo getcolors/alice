@@ -1,8 +1,5 @@
 { pkgs, ... }:
 {
-  languages.clojure.enable = true;
-  languages.opentofu.enable = true;
-  packages = with pkgs; [
-    ansible babashka curl doctl openssh
-  ];
+  languages.python.enable = true;
+  packages = with pkgs; [ uv openssh rsync ];
 }

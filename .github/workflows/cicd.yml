@@ -7,12 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: DeLaGuardo/setup-clojure@13.4
-        with:
-          bb: latest
       - uses: astral-sh/setup-uv@v6
-      - run: bb test
-      - run: bb golden
-      - run: ./scripts/launcher.sh
-      - run: uv run --with ansible-core python scripts/ssh-config-probe.py
-      - run: uv run --with ansible-core bash scripts/syntax.sh
+      - run: uv sync --locked --extra test
+      - run: uv run --locked --extra test pytest
+      - run: uv build
