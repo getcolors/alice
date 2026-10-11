@@ -51,3 +51,5 @@ For shared working-tree development, install PocketDeploy editable with
 packages and copied launchers pin published commits; updates preserve caller-relative
 configuration. Live tests use a separate disposable profile and explicit cloud
 authorization. MIT licensed.
+
+See [verification](docs/verification.md) for dated tests and live-check limits.
