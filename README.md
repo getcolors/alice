@@ -27,6 +27,12 @@ Failures retain the deployment. Rsync never deletes local files. An empty magnet
 list still stops, copies and deletes. Both `sync` and `delete` require an explicit
 `compute-prevent-destroy: false` in YAML; its environment override is ignored.
 
+Interrupting `sync` retains the deployment. A subsequent `delete` can discard it
+without waiting for downloads or performing a final copy. SSH cleanup removes
+only files with verified generation records; unrecorded files are retained and
+reported, never adopted. Changed recorded keys and unsafe paths still block
+teardown. `delete --dry-run` includes the SSH cleanup and retention plan.
+
 `ssh`, `ssh-install`, `ssh-uninstall`, `vault-save` and `vault-restore` use shared
 PocketDeploy authority. Vault checkpoints contain controller recovery state, not
 remote downloads. Keep previous state and encrypted authority until separately

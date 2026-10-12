@@ -10,6 +10,70 @@ def test_sync_protection_precedes_cloud_access(monkeypatch):
         controller.sync({}, {'compute-prevent-destroy': True}, None, None)
 
 
+def test_interrupted_sync_then_delete_retains_unrecorded_files(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from pocketdeploy.host import Host
+    from pocketdeploy.state import State
+    from pocketdeploy.runtime import recorded_operation
+    events = []
+    with State(tmp_path / 'state.sqlite', 'test', {}, create=True) as state:
+        host = Host({}, state, tmp_path)
+        host.known.parent.mkdir()
+        host.known.write_text('synthetic existing trust')
+        cloud = SimpleNamespace(resource_kinds=set(), plan_delete=lambda: [],
+                                delete=lambda op: events.append('delete') or {'deleted': True})
+        current = SimpleNamespace(state=state, host=host, cloud=cloud)
+        def converge(*args):
+            host.prepare_keys()
+            return {}
+        @contextmanager
+        def tunnel(*args):
+            try:
+                yield None
+            finally:
+                events.append('tunnel-closed')
+        def downloading(*args):
+            raise KeyboardInterrupt()
+        monkeypatch.setattr(controller, 'copy_preflight', lambda *a: None)
+        monkeypatch.setattr(controller, 'converge', converge)
+        monkeypatch.setattr(host, 'prepare_transport', lambda *a: None)
+        monkeypatch.setattr(controller, 'tunnel', tunnel)
+        monkeypatch.setattr(controller, 'sync_downloads', downloading)
+        monkeypatch.setattr(controller, 'aliases', lambda *a, **kw: events.append('alias-removed'))
+        config = {'transmission-local-directory': str(tmp_path / 'downloads'),
+                  'transmission-tunnel-local-port': 19091, 'transmission-rpc-port': 9091,
+                  'transmission-magnet-links': []}
+        deployment = {'compute-prevent-destroy': False}
+        with pytest.raises(KeyboardInterrupt):
+            with recorded_operation(state, 'sync', 'synthetic') as op:
+                controller.sync(config, deployment, current, op)
+        assert events == ['tunnel-closed']
+        assert host.key.exists()
+        with recorded_operation(state, 'delete', 'synthetic') as op:
+            result = controller.delete(config, deployment, current, op)
+        assert events == ['tunnel-closed', 'delete', 'alias-removed']
+        assert result['local_keys']['retained_key_files'] == 1
+        assert host.known.read_text() == 'synthetic existing trust'
+        assert not host.key.exists()
+
+
+def test_delete_dry_run_includes_key_retention(monkeypatch):
+    from contextlib import contextmanager
+    from alice import cli
+    cloud_action = {'resource': 'compute', 'action': 'delete'}
+    key_action = {'resource': 'ssh-key-files', 'action': 'retain'}
+    @contextmanager
+    def session(*args, **kwargs):
+        assert kwargs['read_only'] is True
+        yield SimpleNamespace(
+            cloud=SimpleNamespace(plan_delete=lambda: [cloud_action]),
+            host=SimpleNamespace(plan_key_cleanup=lambda: [key_action]), state=None)
+    monkeypatch.setattr(cli, 'session', session)
+    monkeypatch.setattr(cli, 'load', lambda *a: ({}, {'_root': '.', 'compute-prevent-destroy': False}))
+    result = cli.execute(cli.parser().parse_args(['delete', '--dry-run']))
+    assert result['actions'] == [cloud_action, key_action]
+
+
 def test_tunnel_preserves_caller_error(monkeypatch):
     from contextlib import contextmanager
     from alice.transmission import tunnel

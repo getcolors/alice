@@ -74,7 +74,7 @@ def execute(args):
                 result['transmission'] = controller.remote(host, cloud.connection(), config, 'status')
             return result
         if read_only:
-            return {'actions': cloud.plan_delete() if args.command == 'delete' else cloud.plan(),
+            return {'actions': [*cloud.plan_delete(), *host.plan_key_cleanup()] if args.command == 'delete' else cloud.plan(),
                     'protected': deployment['compute-prevent-destroy']}
         if args.command == 'ssh':
             return {'ssh_exit': host.ssh(cloud.connection(), args.ssh_command)}
