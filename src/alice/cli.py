@@ -118,14 +118,14 @@ def main(argv=None):
             print(json.dumps(result, indent=2))
         return 0
     except KeyboardInterrupt:
-        reporter.failure('Interrupted; deployment retained for inspection.', code='interrupted')
+        reporter.failure('Interrupted; deployment retained for inspection.', code='interrupted', stage=reporter.failed_stage)
         return 130
     except DeployError as error:
         reporter.failure(str(error), code=error.code, stage=error.stage or reporter.failed_stage,
                          elapsed_seconds=time.monotonic() - started, diagnostic=error.diagnostic)
         return 1
     except Exception:
-        reporter.failure('Alice operation failed; private output suppressed. Inspect deployment state before retry.')
+        reporter.failure('Alice operation failed; private output suppressed. Inspect deployment state before retry.', stage=reporter.failed_stage)
         return 1
 
 

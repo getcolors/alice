@@ -94,3 +94,65 @@ def test_cli_reports_structured_diagnostic(monkeypatch, capsys):
     result = json.loads(output.out or output.err)
     assert 'downloads-checksum-copy' in json.dumps(result)
     assert '23' in json.dumps(result)
+
+
+def test_copy_preflight_failure_prevents_cloud_work(monkeypatch):
+    def fail(destination):
+        raise DeployError('Local copy preflight failed.')
+    monkeypatch.setattr(controller, 'copy_preflight', fail)
+    monkeypatch.setattr(controller, 'converge', lambda *a: pytest.fail('must not provision'))
+    with pytest.raises(DeployError, match='preflight'):
+        controller.sync({'transmission-local-directory': 'synthetic'},
+                        {'compute-prevent-destroy': False}, None, None)
+
+
+@pytest.mark.parametrize('failure_stage', ['provisioning', 'verification'])
+def test_failed_converge_keeps_intent_pending(monkeypatch, tmp_path, failure_stage):
+    from contextlib import contextmanager
+    events = []
+    state = SimpleNamespace(intent=lambda *a: events.append('intent') or 1,
+                            complete=lambda *a: pytest.fail('must remain pending'))
+    public = tmp_path / 'public'; public.write_text('synthetic-public')
+    host = SimpleNamespace(pub=public, cloud_init=lambda: {}, rotate_key=lambda *a: None,
+                           prepare_transport=lambda *a: None)
+    cloud = SimpleNamespace(plan=lambda: [], converge=lambda *a: {'instance_id': 'synthetic'})
+    monkeypatch.setattr(controller, 'initialize', lambda *a: None)
+    def remote(*a):
+        events.append('provisioning')
+        if failure_stage == 'provisioning':
+            raise DeployError('Synthetic failure')
+    monkeypatch.setattr(controller, 'remote', remote)
+    @contextmanager
+    def tunnel(*a):
+        events.append('verification')
+        raise DeployError('Synthetic failure')
+        yield
+    monkeypatch.setattr(controller, 'tunnel', tunnel)
+    monkeypatch.setattr(controller, 'aliases', lambda *a: pytest.fail('must not install alias'))
+    deployment = {'_desired_hash': 'synthetic'}
+    with pytest.raises(DeployError):
+        controller.converge({'transmission-rpc-port': 9091, 'transmission-tunnel-local-port': 19091},
+                            deployment, SimpleNamespace(state=state, cloud=cloud, host=host, root=tmp_path), 1)
+    assert events[0] == 'intent'
+    assert '_cloud_init' not in deployment
+
+
+def test_remote_progress_stays_off_json_stdout(monkeypatch, capsys):
+    import json
+    from alice import cli
+    def run_python(*args, progress, allowed_stages, **kwargs):
+        assert 'apt-install' in allowed_stages
+        progress('apt-install', 'started')
+        progress('apt-install', 'completed')
+        return {'ok': True}
+    host = SimpleNamespace(run_python=run_python)
+    monkeypatch.setattr(cli, 'execute', lambda args: controller.remote(
+        host, {}, {'transmission-rpc-port': 9091}, 'converge'))
+    assert cli.main(['converge', '--verbose', '--json']) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['ok'] is True
+    assert 'apt-install' in captured.err
+    assert cli.main(['converge', '--quiet', '--json']) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)['ok'] is True
+    assert captured.err == ''

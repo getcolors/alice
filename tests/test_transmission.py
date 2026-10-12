@@ -49,8 +49,8 @@ def test_rsync_never_deletes(monkeypatch, tmp_path):
     monkeypatch.setattr('alice.transmission.subprocess.run', lambda argv, **kw: calls.append(argv) or SimpleNamespace(returncode=0))
     copy_downloads(SimpleNamespace(rsync_shell=lambda: 'ssh -o StrictHostKeyChecking=yes'),
                    {'user': 'root', 'ip': '192.0.2.1'}, tmp_path, checksum=True)
-    assert '--delete' not in calls[0]
-    assert '--checksum' in calls[0]
+    assert all('--delete' not in call for call in calls)
+    assert '--checksum' in calls[-1]
 
 
 def test_metadata_is_required_before_teardown():
@@ -130,7 +130,7 @@ def test_rpc_transport_diagnostics(monkeypatch, kind, category):
 @pytest.mark.parametrize('returncode', [23, -15])
 def test_copy_diagnostic_excludes_paths(monkeypatch, tmp_path, checksum, returncode):
     from types import SimpleNamespace
-    monkeypatch.setattr('alice.transmission.subprocess.run', lambda *a, **kw: SimpleNamespace(returncode=returncode))
+    monkeypatch.setattr('alice.transmission.subprocess.run', lambda argv, **kw: SimpleNamespace(returncode=0 if '--version' in argv else returncode))
     with pytest.raises(DeployError) as failure:
         copy_downloads(SimpleNamespace(rsync_shell=lambda: 'PRIVATE'),
                        {'user': 'PRIVATE', 'ip': 'PRIVATE'}, tmp_path / 'PRIVATE', checksum=checksum)
@@ -161,3 +161,68 @@ def test_rpc_invalid_torrent_list_is_diagnosed(monkeypatch):
         Client(9091).call('torrent-get')
     assert failure.value.diagnostic['category'] == 'invalid_response'
     assert 'PRIVATE' not in repr(failure.value.diagnostic)
+
+
+@pytest.mark.parametrize('kind, category', [
+    ('unsupported', 'nonzero_exit'), ('missing', 'unavailable'), ('timeout', 'timeout')])
+def test_rsync_preflight_retains_resources_and_suppresses_output(monkeypatch, tmp_path, kind, category):
+    import subprocess
+    from types import SimpleNamespace
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs['stdout'] == subprocess.DEVNULL
+        assert kwargs['stderr'] == subprocess.DEVNULL
+        assert kwargs['timeout'] == 10
+        if kind == 'missing':
+            raise FileNotFoundError('PRIVATE')
+        if kind == 'timeout':
+            raise subprocess.TimeoutExpired(['PRIVATE'], 10, output='PRIVATE')
+        return SimpleNamespace(returncode=1)
+    monkeypatch.setattr('alice.transmission.subprocess.run', run)
+    with pytest.raises(DeployError) as failure:
+        copy_downloads(SimpleNamespace(rsync_shell=lambda: pytest.fail('transport')),
+                       {}, tmp_path / 'PRIVATE')
+    assert calls == [['rsync', '--protect-args', '--version']]
+    assert failure.value.diagnostic['operation'] == 'downloads-rsync-preflight'
+    assert failure.value.diagnostic['category'] == category
+    assert 'PRIVATE' not in str(failure.value) + repr(failure.value.diagnostic)
+    assert not (tmp_path / 'PRIVATE').exists()
+
+
+def test_destination_preflight_is_sanitized(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from alice.transmission import copy_preflight
+    monkeypatch.setattr('alice.transmission.subprocess.run', lambda *a, **kw: SimpleNamespace(returncode=0))
+    def fail(**kwargs):
+        raise PermissionError('PRIVATE')
+    monkeypatch.setattr('alice.transmission.tempfile.TemporaryFile', fail)
+    with pytest.raises(DeployError) as failure:
+        copy_preflight(tmp_path)
+    assert failure.value.diagnostic['operation'] == 'downloads-destination-preflight'
+    assert failure.value.diagnostic['category'] == 'permission'
+    assert 'PRIVATE' not in str(failure.value) + repr(failure.value.diagnostic)
+
+
+@pytest.mark.parametrize('returncode, category', [(2, 'rejected'), (10, 'connection'), (30, 'timeout'), (35, 'timeout')])
+def test_rsync_exit_categories(monkeypatch, tmp_path, returncode, category):
+    from types import SimpleNamespace
+    monkeypatch.setattr('alice.transmission.subprocess.run', lambda argv, **kw:
+                        SimpleNamespace(returncode=0 if '--version' in argv else returncode))
+    with pytest.raises(DeployError) as failure:
+        copy_downloads(SimpleNamespace(rsync_shell=lambda: 'PRIVATE'),
+                       {'user': 'PRIVATE', 'ip': 'PRIVATE'}, tmp_path)
+    assert failure.value.diagnostic['category'] == category
+    assert failure.value.diagnostic['exit_code'] == returncode
+
+
+def test_verbose_sync_stages_exclude_magnets(capsys):
+    from pocketdeploy.output import Reporter
+    with Reporter(verbose=True).activate():
+        sync_downloads(RPC(), [MAGNET], lambda **kw: None, lambda: None, lambda: None)
+    captured = capsys.readouterr()
+    assert not captured.out
+    for stage in ['downloads-submit', 'downloads-start', 'downloads-check', 'transmission-stop']:
+        assert f'{stage}: started' in captured.err
+        assert f'{stage}: completed' in captured.err
+    assert MAGNET not in captured.err

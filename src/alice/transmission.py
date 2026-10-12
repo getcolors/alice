@@ -5,11 +5,13 @@ from pathlib import Path
 import re
 import subprocess
 import time
+import tempfile
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
 from pocketdeploy.common import DeployError
 from pocketdeploy.diagnostics import build_diagnostic
+from pocketdeploy.output import operation
 
 
 def magnet_hash(value):
@@ -73,21 +75,52 @@ class RPC:
 def tunnel(transport, local_port, remote_port):
     started = time.monotonic()
     with transport.tunnel(local_port, remote_port):
-        for _ in range(60):
-            try:
-                with urlopen(f'http://127.0.0.1:{local_port}/transmission/web/', timeout=2) as response:
-                    if response.status == 200:
-                        break
-            except (URLError, OSError):
-                time.sleep(1)
-        else:
-            raise DeployError('Tunneled Transmission UI acceptance timed out.',
-                diagnostic=build_diagnostic('transmission-ui', 'timeout', elapsed_seconds=time.monotonic() - started))
+        with operation('transmission-ui-verification'):
+            for _ in range(60):
+                try:
+                    with urlopen(f'http://127.0.0.1:{local_port}/transmission/web/', timeout=2) as response:
+                        if response.status == 200:
+                            break
+                except (URLError, OSError):
+                    time.sleep(1)
+            else:
+                raise DeployError('Tunneled Transmission UI acceptance timed out.',
+                    diagnostic=build_diagnostic('transmission-ui', 'timeout', elapsed_seconds=time.monotonic() - started))
         yield RPC(local_port)
 
 
+def copy_preflight(destination):
+    """Check local copy requirements without displaying command output or paths."""
+    with operation('downloads-rsync-preflight'):
+        started = time.monotonic()
+        try:
+            completed = subprocess.run(['rsync', '--protect-args', '--version'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise DeployError('Rsync preflight failed; install rsync with --protect-args support.',
+                diagnostic=build_diagnostic('downloads-rsync-preflight',
+                    'timeout' if isinstance(error, subprocess.TimeoutExpired) else 'unavailable',
+                    elapsed_seconds=time.monotonic() - started)) from None
+        if completed.returncode:
+            raise DeployError('Rsync preflight failed; install rsync with --protect-args support.',
+                diagnostic=build_diagnostic('downloads-rsync-preflight', 'nonzero_exit',
+                    returncode=completed.returncode, elapsed_seconds=time.monotonic() - started))
+    with operation('downloads-destination-preflight'):
+        started = time.monotonic()
+        try:
+            Path(destination).mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=destination) as probe:
+                probe.write(b'alice-copy-preflight')
+                probe.flush()
+        except OSError as error:
+            raise DeployError('Download destination is not writable; deployment retained.',
+                diagnostic=build_diagnostic('downloads-destination-preflight',
+                    'permission' if isinstance(error, PermissionError) else 'unavailable',
+                    elapsed_seconds=time.monotonic() - started)) from None
+
+
 def copy_downloads(transport, connection, destination, *, checksum=False):
-    Path(destination).mkdir(parents=True, exist_ok=True)
+    copy_preflight(destination)
     command = ['rsync', '-a', '--protect-args', '--partial']
     if checksum:
         command.append('--checksum')
@@ -95,34 +128,44 @@ def copy_downloads(transport, connection, destination, *, checksum=False):
                 f"{connection['user']}@{connection['ip']}:/var/lib/transmission-daemon/downloads/",
                 str(Path(destination).absolute()) + '/']
     started = time.monotonic()
-    operation = 'downloads-checksum-copy' if checksum else 'downloads-incremental-copy'
-    try:
-        completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError:
-        raise DeployError('Download copy unavailable; deployment retained.',
-            diagnostic=build_diagnostic(operation, 'unavailable', elapsed_seconds=time.monotonic() - started)) from None
-    if completed.returncode:
-        raise DeployError('Download copy failed; deployment retained.',
-            diagnostic=build_diagnostic(operation, 'signal' if completed.returncode < 0 else 'nonzero_exit', returncode=completed.returncode,
-                                        elapsed_seconds=time.monotonic() - started))
+    label = 'downloads-checksum-copy' if checksum else 'downloads-incremental-copy'
+    with operation(label):
+        try:
+            completed = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            raise DeployError('Download copy unavailable; deployment retained.',
+                diagnostic=build_diagnostic(label, 'unavailable', elapsed_seconds=time.monotonic() - started)) from None
+        if completed.returncode:
+            # Rsync documents protocol, socket I/O and timeout exit statuses. Keep
+            # ambiguous file/SSH failures as nonzero_exit rather than guessing.
+            category = {2: 'rejected', 10: 'connection', 30: 'timeout', 35: 'timeout'}.get(
+                completed.returncode, 'nonzero_exit')
+            raise DeployError('Download copy failed; deployment retained.',
+                diagnostic=build_diagnostic(label, 'signal' if completed.returncode < 0 else category,
+                    returncode=completed.returncode, elapsed_seconds=time.monotonic() - started))
 
 
 def sync_downloads(rpc, magnets, copy, stop, delete, *, sleep=time.sleep):
     wanted = {magnet_hash(magnet) for magnet in magnets}
-    for magnet in magnets:
-        rpc.call('torrent-add', {'filename': magnet})
+    with operation('downloads-submit'):
+        for magnet in magnets:
+            rpc.call('torrent-add', {'filename': magnet})
     if wanted:
-        rpc.call('torrent-start', {'ids': sorted(wanted)})
+        with operation('downloads-start'):
+            rpc.call('torrent-start', {'ids': sorted(wanted)})
     while wanted:
-        torrents = rpc.call('torrent-get', {'fields': ['hashString', 'percentDone', 'metadataPercentComplete', 'leftUntilDone', 'error']}).get('torrents', [])
-        selected = {t['hashString'].lower(): t for t in torrents if t.get('hashString', '').lower() in wanted}
-        if any(t.get('error', 0) for t in selected.values()):
-            raise DeployError('Transmission reported a download error; deployment retained.',
-                diagnostic=build_diagnostic('transmission-download', 'rejected'))
+        with operation('downloads-check'):
+            torrents = rpc.call('torrent-get', {'fields': ['hashString', 'percentDone', 'metadataPercentComplete', 'leftUntilDone', 'error']}).get('torrents', [])
+            selected = {t['hashString'].lower(): t for t in torrents if t.get('hashString', '').lower() in wanted}
+            if any(t.get('error', 0) for t in selected.values()):
+                raise DeployError('Transmission reported a download error; deployment retained.',
+                    diagnostic=build_diagnostic('transmission-download', 'rejected'))
         copy(checksum=False)
         if set(selected) == wanted and all(t.get('percentDone') == 1 and t.get('metadataPercentComplete') == 1 and t.get('leftUntilDone') == 0 for t in selected.values()):
             break
-        sleep(10)
-    stop()
+        with operation('downloads-wait'):
+            sleep(10)
+    with operation('transmission-stop'):
+        stop()
     copy(checksum=True)
     return delete()

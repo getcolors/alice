@@ -72,3 +72,30 @@ The published Alice source `8f27cabc67d351f136cdbcba895837b9bc3fe119`
 passed all 42 tests with the locked published dependency and source/wheel builds.
 Both portable launcher copies pin that source; the copied-launcher check passed
 from an unrelated temporary directory. No live Alice validation was requested.
+
+## Live stage reporting — 12 October 2026
+
+Authorized disposable DigitalOcean sync tested the unpublished Alice source with
+editable PocketDeploy streaming support. Used a separate 1 GB Ubuntu 24.04 profile,
+an empty magnet list and a 250,000-byte synthetic file seeded after convergence.
+The system rsync failed the new `--protect-args` preflight; Nix rsync 3.4.4 passed.
+No existing deployment was reused or modified.
+
+Verbose output showed local preflight, cloud readiness (48.2 s), SSH trust (70.7 s),
+remote apt update (11.6 s), apt install (104.3 s), AppArmor, configuration, service,
+UI/RPC verification, stop, final checksum copy (1.0 s), and teardown (15.9 s).
+Remote package-stage heartbeats arrived live under the single provisioning lock.
+Sync exited zero; an independent local SHA-256 comparison verified the copied
+synthetic file. Subsequent provider inventory confirmed the disposable Droplet,
+firewall and tag absent. Local verification found zero resources or pending steps
+and removed generated private keys; the deletion receipt and copied fixture remain.
+
+This exercises the empty-magnet final-copy path, not magnet metadata discovery,
+swarm transfer, incremental copying, failure injection, or Vault recovery.
+Published dependency and portable launcher pins were not changed.
+
+Release validation subsequently pinned Alice to published PocketDeploy
+`67d55c4ac51f3b79963de5c098e9a1f72765253b`. PocketDeploy passed 920 tests and
+four subtests after integration with current upstream; Alice passed all 59 tests
+against that published dependency. Builds succeeded, and `devenv shell --no-tui
+-- alice --help` passed using the locked wrapper and compatible Nix rsync.

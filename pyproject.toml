@@ -3,7 +3,7 @@ name = "alice-transmission"
 version = "3.0.0"
 description = "Private Transmission on DigitalOcean using PocketDeploy"
 requires-python = ">=3.11"
-dependencies = ["pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@843f4c001b2aa32b8b55756e9340656e06b036e0"]
+dependencies = ["pocketdeploy @ git+https://github.com/pocketcontext/pocketdeploy.git@67d55c4ac51f3b79963de5c098e9a1f72765253b"]
 
 [project.scripts]
 alice = "alice.cli:main"

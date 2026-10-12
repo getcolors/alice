@@ -61,3 +61,29 @@ responses, rejection, HTTP, connection and timeout failures; rsync identifies
 incremental versus final checksummed copying. Diagnostics never include command
 arguments, paths, magnet links, torrent names, session headers or response bodies.
 No masking or output excerpts are used, and retry/deletion policy is unchanged.
+
+With `sync --verbose`, fixed stages report starts, completion/failure, elapsed time
+and waiting heartbeats on stderr. Remote package, AppArmor, configuration and
+service stages stream through the shared pinned SSH transport while one remote
+lock covers provisioning. Events are advisory; successful RPC verification still
+completes the durable convergence intent. JSON mode retains one final result/error
+envelope on stdout; quiet mode suppresses progress.
+
+Sync checks local rsync `--protect-args` support and destination write access before
+cloud convergence. An incompatible rsync now fails as `downloads-rsync-preflight`
+with an installation hint. Copy failures retain resources, and no raw rsync or
+remote command output is exposed.
+
+The devenv shell provides compatible rsync, OpenSSH and Python. Its `alice`
+command runs this checkout with locked dependencies while retaining the caller's
+working directory for configuration:
+
+```sh
+devenv shell --no-tui -- alice --help
+```
+
+For shared working-tree development, install PocketDeploy editable as described
+above and use `devenv shell --no-tui -- .venv/bin/python -m alice.cli` from this
+checkout. The locked `alice` wrapper intentionally restores published dependencies.
+Release order is PocketDeploy publication, Alice dependency pin and publication,
+then portable launcher pins to the published Alice commit.
